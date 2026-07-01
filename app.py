@@ -47,10 +47,29 @@ with col2:
 
 company_name = st.text_input(
     "🏢 公司名称",
-    placeholder="选填。填了出公司背景和行业对比",
+    placeholder="必填。你想应聘哪家公司？",
+)
+
+mode = st.radio(
+    "输出模式",
+    options=["⚡ 简洁（推荐）", "📋 详细"],
+    horizontal=True,
+    help="简洁模式输出更快，详细模式包含更多面试题和公司分析",
 )
 
 # ── 模型初始化（只跑一次） ──
+@st.cache_resource
+def get_jd_check_model():
+    """轻量模型，只做 JD 有效性筛查"""
+    return ChatOpenAI(
+        model=os.environ.get("MODEL_NAME", "deepseek-chat"),
+        api_key=os.environ.get("DEEPSEEK_API_KEY"),
+        base_url="https://api.deepseek.com/v1",
+        temperature=0,
+        timeout=15,
+    )
+
+
 @st.cache_resource
 def get_agent():
     model = ChatOpenAI(
@@ -123,10 +142,40 @@ def get_agent():
 if st.button("🔍 开始评估", type="primary", use_container_width=True):
     if not jd_text.strip():
         st.error("请先粘贴岗位描述")
+    elif len(jd_text.strip()) > 5000:
+        st.error("岗位描述超过 5000 字，请精简到核心要求再贴")
     elif not resume_text.strip():
         st.error("请先填写你的经历")
+    elif len(resume_text.strip()) > 3000:
+        st.error("经历超过 3000 字，请精简到关键项目再贴")
+    elif not company_name.strip():
+        st.error("请填写公司名称")
     else:
+        check_model = get_jd_check_model()
+
+        # ── JD + 简历联合筛查（一次调用省一轮请求） ──
+        with st.spinner("正在检查输入是否有效…"):
+            check_prompt = (
+                "请逐行判断以下两个输入的有效性，每行只回复「是」或「否」：\n"
+                f"1. 以下是招聘岗位描述（JD）吗？\n{jd_text.strip()[:2000]}\n\n"
+                f"2. 以下是个人经历/简历吗？\n{resume_text.strip()[:2000]}"
+            )
+            check_result = check_model.invoke(check_prompt)
+            check_text = str(check_result.content)
+
+        jd_ok = "是" in check_text.split("\n")[0] if check_text else False
+        resume_ok = "是" in check_text.split("\n")[-1] if check_text else False
+
+        if not jd_ok:
+            st.error("❌ 粘贴的内容不像一个岗位描述。请确认你贴的是招聘 JD。")
+            st.stop()
+        if not resume_ok:
+            st.error("❌ 粘贴的内容不像一份个人经历。请确认你填的是简历或项目经历。")
+            st.stop()
+
         agent = get_agent()
+
+        is_concise = "简洁" in mode
 
         user_input = (
             f"请拆解以下岗位描述：\n\n{jd_text.strip()}\n\n"
@@ -135,32 +184,59 @@ if st.button("🔍 开始评估", type="primary", use_container_width=True):
         if company_name.strip():
             user_input += f"\n\n最后，搜索 {company_name.strip()} 的公司背景，判断这家公司是否适合这位求职者。"
 
-        with st.spinner("Agent 正在分析…（预计 1~2 分钟）"):
+        if is_concise:
+            user_input += (
+                "\n\n【输出要求：简洁模式】\n"
+                "- JD 拆解：每条要求一行，不展开解释\n"
+                "- 人岗匹配：三栏分类即可，匹配度打分一句话\n"
+                "- 面试预测：只出 3 道最可能被问的题\n"
+                "- 公司分析：不写"
+            )
+
+        # 占位：导出按钮先显示但不可用
+        download_placeholder = st.empty()
+
+        wait_msg = "Agent 正在分析…（简洁模式预计 2~3 分钟，请勿刷新）" if is_concise else "Agent 正在分析…（详细模式预计 3~5 分钟，请勿刷新）"
+        with st.spinner(wait_msg):
             try:
-                result = agent.invoke(
-                    {"messages": [{"role": "user", "content": user_input}]},
-                    config={"configurable": {"thread_id": "1"}},
-                )
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(
+                        agent.invoke,
+                        {"messages": [{"role": "user", "content": user_input}]},
+                        {"configurable": {"thread_id": "1"}},
+                    )
+                    result = future.result(timeout=180)
 
                 try:
                     messages = result.get("messages", []) if hasattr(result, "get") else getattr(result, "messages", [])
 
-                    # 只取主 Agent 最终汇总（ai 类型、无 name）
-                    final_output = ""
+                    # 收集所有主 Agent 输出（过滤子 Agent 中间输出）
+                    parts = []
                     for msg in (messages if isinstance(messages, list) else []):
                         if getattr(msg, "type", "") == "ai" and not getattr(msg, "name", None):
                             content = str(getattr(msg, "content", "") or "")
-                            if len(content) > 100:
-                                final_output = content
+                            if len(content) > 50:
+                                parts.append(content)
+                    final_output = "\n\n".join(parts) if parts else ""
 
                     if final_output:
                         st.success("✅ 评估完成")
                         st.markdown(final_output)
+                        download_placeholder.download_button(
+                            label="📥 下载评估报告 (Markdown)",
+                            data=final_output,
+                            file_name="求职评估报告.md",
+                            mime="text/markdown",
+                            use_container_width=True,
+                        )
                     else:
                         st.warning("Agent 返回了空结果，请重试")
                 except Exception as render_error:
                     st.warning(f"输出渲染异常：{render_error}")
                     st.text(str(result))
 
+            except concurrent.futures.TimeoutError:
+                st.error("⏱️ 分析超时（3 分钟），请缩短 JD 或重试")
             except Exception as e:
                 st.error(f"运行出错：{e}")
