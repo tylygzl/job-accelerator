@@ -1,5 +1,8 @@
+# HR 加速器 · gitignore
 .env
+search_results.json
+shixiseng_profile/
 .venv/
 __pycache__/
 *.pyc
-.uv/
+.DS_Store
