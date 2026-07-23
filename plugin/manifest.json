@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "求职加速器",
+  "version": "0.2.0",
+  "description": "BOSS 直聘岗位 JD 匹配分析助手",
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": ["*://*.zhipin.com/*", "http://localhost:*/*", "http://127.0.0.1:*/*"],
+  "action": {
+    "default_title": "分析当前岗位",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.zhipin.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
