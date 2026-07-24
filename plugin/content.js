@@ -15,7 +15,7 @@
   const CHAT_CONFIRM_WAIT_MS = 90 * 1000;
   const DETAIL_SCAN_TIMEOUT_MS = 5 * 1000;
   const DETAIL_SCAN_INTERVAL_MS = 200;
-  const DETAIL_SCAN_COOLDOWN_MS = 1500;
+  const DETAIL_SCAN_COOLDOWN_MS = 1000;
   const DETAIL_SCAN_BATCH_LIMIT = 5;
   const DETAIL_READY_RE = /职位描述|岗位职责|工作职责|任职要求|岗位要求|任职资格|工作内容/;
   const JOB_CARD_SELECTOR = ".job-card-box,.job-card-wrapper";
