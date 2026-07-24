@@ -118,7 +118,7 @@ SKILL_MATCHER_PROMPT = """你是“技能匹配员”。你会收到 JD 拆解�
 - risk_level 只能是“低”“中”“高”：75分及以上低，50-74中，50以下高。
 - matched_skills 必须引用候选人 skills.json 中的 level/evidence/project。
 - missing_skills 不要扩大缺口，只列 JD 关心但候选人证据不足的点。
-- opening_message 用 opening_target 开头，结合 JD 具体要求和候选人证据写 80-140 字，必须包含 GitHub: tylygzl；不要写“我热爱”“学习能力强”“希望给机会”等空话；50 分以下不要说高度匹配。"""
+- opening_message 用 opening_target 开头，结合 JD 具体要求和候选人证据写 80-140 字，必须包含 GitHub: tylygzl；不要写“我热爱”“学习能力强”“快速学习”“感兴趣”“期待交流”“希望给机会”等空话；50 分以下不要说高度匹配。"""
 
 
 RESUME_SKILL_EXTRACTOR_PROMPT = """从以下简历提取技能列表，格式跟 skills.json 一样：must_have数组+familiar数组+projects数组，每项含skill/level/evidence。
@@ -901,18 +901,27 @@ def _sanitize_opening_message(message: Any, target: str, fallback: str, score: i
     if len(clean) < 20:
         return fallback
 
-    empty_words = ["我热爱", "学习能力强", "希望给机会", "希望贵公司给机会"]
+    empty_words = ["我热爱", "学习能力强", "希望给机会", "希望贵公司给机会", "快速学习"]
     if any(empty_word in clean for empty_word in empty_words):
         return fallback
-    clean = clean.replace("您好，", "").replace("您好,", "").strip()
+    clean = re.sub(r"您好[，,!！。]*", "", clean).strip()
+    clean = re.sub(r"我是正在应聘[^。；;]{0,50}候选人[。；;]*", "", clean).strip()
+    clean = re.sub(r"我对[^。；;]{0,50}感兴趣[，。；;!！]*", "", clean).strip()
+    clean = re.sub(r"(期待|希望)[^。；;]{0,30}(交流|沟通)[。；;!！]*$", "", clean).strip()
+    clean = re.sub(r"GitHub[（(]\s*tylygzl\s*[）)]", "GitHub: tylygzl", clean, flags=re.I)
+    clean = re.sub(r"GitHub[:：]?\s*tylygzl", "GitHub: tylygzl", clean, flags=re.I)
+    clean = re.sub(r"(虽然|但是|同时|另外|此外)[。；;!！]*$", "", clean).strip()
 
     if score < 50:
         clean = clean.replace("高度匹配", "有部分工程交集").replace("非常匹配", "有部分交集")
 
-    if "tylygzl" not in clean:
+    if "GitHub: tylygzl" not in clean:
         clean = clean.rstrip(" ，。；;") + "。GitHub: tylygzl。"
 
-    if target and target != "这个岗位" and not clean.startswith(target):
+    if target and target != "这个岗位":
+        if clean.startswith(target):
+            clean = clean[len(target) :].lstrip(" ，,。:：")
+            clean = re.sub(r"^(的)?这个岗位[，,。:：]*", "", clean).strip()
         clean = f"{target}的这个岗位，{clean}"
 
     clean = re.sub(r"\s+", " ", clean).strip()
