@@ -31,9 +31,10 @@ def risk_label(value: Any) -> str:
 
 
 def evaluate_case(case: dict[str, Any], resume_text: str, use_llm: bool) -> dict[str, Any]:
+    case_resume_text = str(case.get("resume_text") or resume_text)
     report = match_jd(
         case["jd_text"],
-        resume_text=resume_text,
+        resume_text=case_resume_text,
         llm=None if use_llm else False,
     )
     score = int(report.get("match_score", 0))

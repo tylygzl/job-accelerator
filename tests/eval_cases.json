@@ -48,6 +48,15 @@
       "expected_score_min": 0,
       "expected_score_max": 55,
       "require_opening": false
+    },
+    {
+      "id": "robot_rl_candidate_high",
+      "label": "机器人候选人高匹配",
+      "resume_text": "机器人强化学习方向简历：使用 Python、PyTorch、PPO、DQN、SAC、MuJoCo、Isaac Gym、ROS、MoveIt 和 Gazebo 做机器人控制实验；复现模仿学习、行为克隆和强化学习论文，完成机械臂抓取和运动规划项目。GitHub 用户名 tylygzl。",
+      "jd_text": "岗位：算法实习生-模仿学习\n公司：深信服科技\n职责：参与机器人控制、模仿学习、行为克隆和强化学习算法实验。\n要求：熟悉 PyTorch 或 TensorFlow，了解强化学习、模仿学习、机器人运动规划，有论文复现或算法竞赛经验优先。",
+      "expected_score_min": 70,
+      "expected_score_max": 100,
+      "require_opening": true
     }
   ]
 }

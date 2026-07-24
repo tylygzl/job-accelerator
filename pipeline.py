@@ -133,13 +133,20 @@ RESUME_SKILL_EXTRACTOR_PROMPT = """从以下简历提取技能列表，格式跟
   ],
   "projects": [
     {"skill": "项目名或项目相关技能", "level": "项目经验", "evidence": "项目证据、技术栈或成果"}
-  ]
+  ],
+  "target_profile": {
+    "target_roles": ["适合投递的岗位名称"],
+    "core_domains": ["候选人的核心求职方向"],
+    "transferable_roles": ["可以迁移尝试的岗位方向"],
+    "avoid_roles": ["明显不建议投递的岗位方向"]
+  }
 }
 
 规则：
 - must_have 放简历中证据明确、能作为核心竞争力的技能。
 - familiar 放有接触但证据较弱或熟悉程度较浅的技能。
 - projects 放能支撑技能判断的项目证据。
+- target_profile 必须根据简历证据推断，不要写死行业；例如 AI Agent 候选人适合 AI 应用/后端/RAG，机器人候选人适合机器人/强化学习，销售候选人适合销售/BD。
 - 不要编造简历没有出现的技能或项目。"""
 
 
@@ -176,6 +183,9 @@ SKILL_ALIASES: dict[str, list[str]] = {
     "微信小程序": ["小程序", "微信小程序"],
     "K8s/容器编排": ["k8s", "kubernetes", "容器编排"],
     "算法/数据结构": ["算法", "数据结构"],
+    "PyTorch/TensorFlow": ["pytorch", "tensorflow", "torch"],
+    "强化学习/机器人": ["强化学习", "reinforcement learning", "ppo", "dqn", "sac", "模仿学习", "imitation learning", "行为克隆", "behavior cloning", "机器人", "ros", "moveit", "mujoco", "isaac gym", "gazebo"],
+    "机器学习/深度学习": ["机器学习", "machine learning", "深度学习", "deep learning"],
 }
 
 
@@ -194,6 +204,9 @@ FALLBACK_SKILL_RULES: list[tuple[str, list[str], str]] = [
     ("Git/GitHub", ["github", "git"], "preferred"),
     ("Docker/Nginx/部署", ["docker", "nginx", "部署"], "preferred"),
     ("K8s/容器编排", ["k8s", "kubernetes", "容器编排"], "preferred"),
+    ("PyTorch/TensorFlow", ["pytorch", "tensorflow", "torch"], "required"),
+    ("强化学习/机器人", ["强化学习", "reinforcement learning", "ppo", "dqn", "sac", "模仿学习", "imitation learning", "行为克隆", "behavior cloning", "机器人", "ros", "moveit", "mujoco", "isaac gym", "gazebo"], "required"),
+    ("机器学习/深度学习", ["机器学习", "machine learning", "深度学习", "deep learning"], "required"),
 ]
 
 
@@ -374,11 +387,96 @@ def _resume_project(item: dict[str, str]) -> dict[str, Any]:
     }
 
 
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, dict):
+        value = value.values()
+    result: list[str] = []
+    for item in value or []:
+        text = str(item).strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _profile_text(skills_profile: dict[str, Any]) -> str:
+    try:
+        return json.dumps(skills_profile, ensure_ascii=False).lower()
+    except TypeError:
+        return str(skills_profile).lower()
+
+
+def _infer_target_profile(skills_profile: dict[str, Any]) -> dict[str, list[str]]:
+    text = _profile_text(skills_profile)
+    target_roles: list[str] = []
+    core_domains: list[str] = []
+    transferable_roles: list[str] = []
+    avoid_roles: list[str] = []
+
+    def add(values: list[str], *items: str) -> None:
+        for item in items:
+            if item and item not in values:
+                values.append(item)
+
+    if _contains_any(text, ["langgraph", "langchain", "agent", "deepseek", "gpt", "llm", "rag", "prompt"]):
+        add(target_roles, "AI Agent 实习生", "大模型应用开发实习生", "RAG 应用开发实习生")
+        add(core_domains, "AI 应用开发", "Agent 工程", "RAG", "LLM API")
+        add(transferable_roles, "Python 后端实习生", "自动化工具开发实习生")
+
+    if _contains_any(text, ["python", "fastapi", "api", "后端", "sql", "docker"]):
+        add(target_roles, "Python 后端实习生")
+        add(core_domains, "后端 API", "工程化开发")
+
+    if _contains_any(text, ["chrome extension", "浏览器插件", "javascript", "自动化"]):
+        add(target_roles, "浏览器插件开发实习生", "自动化工具开发实习生")
+        add(core_domains, "浏览器插件", "前端自动化")
+
+    if _contains_any(text, ["pytorch", "tensorflow", "强化学习", "reinforcement learning", "ppo", "dqn", "sac", "模仿学习", "imitation learning", "行为克隆", "behavior cloning", "机器人", "ros", "moveit", "mujoco", "isaac gym", "gazebo"]):
+        add(target_roles, "机器人算法实习生", "强化学习实习生", "运动控制实习生")
+        add(core_domains, "机器人控制", "强化学习", "深度学习", "仿真环境")
+        add(transferable_roles, "算法实习生", "机器学习实习生")
+
+    if _contains_any(text, ["销售", "bd", "客户沟通", "转化", "课程顾问", "私域运营", "地推", "电话邀约"]):
+        add(target_roles, "销售实习生", "BD 实习生", "课程顾问实习生")
+        add(core_domains, "销售转化", "客户沟通", "私域运营")
+
+    if _contains_any(text, ["内容审核", "数据标注", "社区运营", "内容运营", "质检", "审核规则"]):
+        add(target_roles, "内容审核实习生", "数据标注实习生", "内容运营实习生")
+        add(core_domains, "内容审核", "数据标注", "运营协作")
+
+    if not _contains_any(" ".join([*target_roles, *core_domains]), ["销售", "bd", "课程顾问"]):
+        add(avoid_roles, "销售", "课程顾问", "保险", "带薪培训")
+    if not _contains_any(" ".join([*target_roles, *core_domains]), ["内容审核", "数据标注", "内容运营"]):
+        add(avoid_roles, "内容审核", "数据标注")
+
+    return {
+        "target_roles": target_roles,
+        "core_domains": core_domains,
+        "transferable_roles": transferable_roles,
+        "avoid_roles": avoid_roles,
+    }
+
+
+def _normalize_target_profile(data: dict[str, Any], profile: dict[str, Any]) -> dict[str, list[str]]:
+    raw = data.get("target_profile") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    inferred = _infer_target_profile(profile)
+    normalized: dict[str, list[str]] = {}
+    for key in ["target_roles", "core_domains", "transferable_roles", "avoid_roles"]:
+        values = _string_list(raw.get(key))
+        normalized[key] = values or inferred[key]
+    return normalized
+
+
 def _normalize_resume_profile(data: dict[str, Any]) -> dict[str, Any]:
     must_have = _resume_items(data, "must_have")
     familiar = _resume_items(data, "familiar")
     projects = [_resume_project(item) for item in _resume_items(data, "projects")]
-    return {
+    profile = {
         "name": str(data.get("name") or "简历候选人"),
         "role": str(data.get("role") or ""),
         "skills": {
@@ -388,6 +486,8 @@ def _normalize_resume_profile(data: dict[str, Any]) -> dict[str, Any]:
         "weaknesses": [],
         "projects": projects,
     }
+    profile["target_profile"] = _normalize_target_profile(data, profile)
+    return profile
 
 
 def _resume_keyword_evidence(resume_text: str, alias: str) -> str:
@@ -448,6 +548,7 @@ def _fallback_resume_skills_profile(resume_text: str) -> dict[str, Any] | None:
         "weaknesses": [],
         "projects": projects,
     }
+    profile["target_profile"] = _infer_target_profile(profile)
     return profile if _candidate_skill_items(profile) else None
 
 
@@ -741,11 +842,41 @@ def _contains_any(text: str, keywords: list[str]) -> bool:
 
 
 def _profile_matches_any(skills_profile: dict[str, Any], keywords: list[str]) -> bool:
+    if isinstance(skills_profile, dict):
+        evidence_profile = dict(skills_profile)
+        evidence_profile.pop("target_profile", None)
+    else:
+        evidence_profile = skills_profile
     try:
-        text = json.dumps(skills_profile, ensure_ascii=False).lower()
+        text = json.dumps(evidence_profile, ensure_ascii=False).lower()
     except TypeError:
-        text = str(skills_profile).lower()
+        text = str(evidence_profile).lower()
     return any(keyword.lower() in text for keyword in keywords)
+
+
+def _target_profile_matches_any(skills_profile: dict[str, Any], keywords: list[str], sections: list[str] | None = None) -> bool:
+    target_profile = skills_profile.get("target_profile", {}) if isinstance(skills_profile, dict) else {}
+    if not isinstance(target_profile, dict):
+        return False
+    section_names = sections or ["target_roles", "core_domains", "transferable_roles"]
+    values: list[str] = []
+    for section in section_names:
+        values.extend(_string_list(target_profile.get(section)))
+    return _contains_any(" ".join(values), keywords)
+
+
+def _target_profile_matches_text(skills_profile: dict[str, Any], text: str, sections: list[str]) -> bool:
+    target_profile = skills_profile.get("target_profile", {}) if isinstance(skills_profile, dict) else {}
+    if not isinstance(target_profile, dict):
+        return False
+    values: list[str] = []
+    for section in sections:
+        values.extend(_string_list(target_profile.get(section)))
+    return _contains_any(text, values)
+
+
+def _candidate_supports_direction(skills_profile: dict[str, Any], keywords: list[str]) -> bool:
+    return _profile_matches_any(skills_profile, keywords) or _target_profile_matches_any(skills_profile, keywords)
 
 
 def _matched_report_text(report: dict[str, Any]) -> str:
@@ -760,24 +891,29 @@ def _matched_report_text(report: dict[str, Any]) -> str:
 def _score_cap_for_jd(jd_text: str, report: dict[str, Any], skills_profile: dict[str, Any]) -> tuple[int | None, str]:
     jd_lower = jd_text.lower()
     report_text = _matched_report_text(report).lower()
-    dev_terms = ["开发", "研发", "工程", "算法", "模型", "llm", "agent", "rag", "python", "fastapi", "langgraph", "langchain"]
+    avoid_hit = _target_profile_matches_text(skills_profile, jd_lower, ["avoid_roles"])
+    target_hit = _target_profile_matches_text(skills_profile, jd_lower, ["target_roles", "core_domains", "transferable_roles"])
+    if avoid_hit and not target_hit:
+        return 35, "岗位方向命中用户画像中的规避方向"
 
-    if _contains_any(jd_lower, ["销售", "电话沟通", "邀约", "转化", "地推", "保险", "课程顾问", "带薪培训"]):
-        if not _contains_any(jd_lower, dev_terms):
+    sales_terms = ["销售", "电话沟通", "客户沟通", "邀约", "转化", "地推", "保险", "课程顾问", "带薪培训", "bd", "私域运营"]
+    if _contains_any(jd_lower, sales_terms):
+        if not _candidate_supports_direction(skills_profile, sales_terms):
             return 35, "岗位核心是销售/培训，不是技术开发"
 
-    if _contains_any(jd_lower, ["内容审核", "内容鉴审", "审核", "数据标注", "标注", "运营协助"]):
-        if not _contains_any(jd_lower, ["开发", "研发", "算法", "模型训练", "模型评测"]):
+    content_terms = ["内容审核", "内容鉴审", "审核", "数据标注", "标注", "运营协助", "内容运营", "社区治理", "质检"]
+    if _contains_any(jd_lower, content_terms):
+        if not _candidate_supports_direction(skills_profile, content_terms):
             return 45, "岗位核心是审核/标注/运营，不是 AI 应用开发"
 
-    if _contains_any(jd_lower, ["强化学习", "模仿学习", "行为克隆", "逆强化学习", "机器人", "运动规划"]):
-        rl_evidence = ["pytorch", "tensorflow", "强化学习", "模仿学习", "行为克隆", "机器人", "深度学习"]
-        if not _profile_matches_any(skills_profile, rl_evidence) and not _contains_any(report_text, rl_evidence):
+    if _contains_any(jd_lower, ["强化学习", "reinforcement learning", "模仿学习", "imitation learning", "行为克隆", "behavior cloning", "逆强化学习", "机器人", "运动规划", "ros", "moveit", "mujoco", "isaac gym", "gazebo"]):
+        rl_evidence = ["pytorch", "tensorflow", "强化学习", "reinforcement learning", "ppo", "dqn", "sac", "模仿学习", "imitation learning", "行为克隆", "behavior cloning", "机器人", "机器人控制", "运动规划", "ros", "moveit", "mujoco", "isaac gym", "gazebo", "深度学习"]
+        if not _candidate_supports_direction(skills_profile, rl_evidence) and not _contains_any(report_text, rl_evidence):
             return 55, "岗位强依赖机器人/强化学习证据，当前简历证据不足"
 
-    if _contains_any(jd_lower, ["pytorch", "tensorflow", "深度学习", "机器学习算法"]):
-        ml_evidence = ["pytorch", "tensorflow", "深度学习", "机器学习", "算法竞赛", "论文复现"]
-        if not _profile_matches_any(skills_profile, ml_evidence) and not _contains_any(report_text, ml_evidence):
+    if _contains_any(jd_lower, ["pytorch", "tensorflow", "深度学习", "机器学习算法", "machine learning", "deep learning"]):
+        ml_evidence = ["pytorch", "tensorflow", "深度学习", "deep learning", "机器学习", "machine learning", "算法竞赛", "论文复现"]
+        if not _candidate_supports_direction(skills_profile, ml_evidence) and not _contains_any(report_text, ml_evidence):
             return 60, "岗位强依赖机器学习框架或算法证据，当前简历证据不足"
 
     return None, ""
@@ -970,9 +1106,11 @@ def _sanitize_opening_message(message: Any, target: str, fallback: str, score: i
     empty_words = ["我热爱", "学习能力强", "希望给机会", "希望贵公司给机会", "快速学习"]
     if any(empty_word in clean for empty_word in empty_words):
         return fallback
+    clean = re.sub(r"招聘团队[，,。:：]*", "", clean).strip()
     clean = re.sub(r"您好[，,!！。]*", "", clean).strip()
     clean = re.sub(r"我是正在应聘[^。；;]{0,50}候选人[。；;]*", "", clean).strip()
     clean = re.sub(r"我对[^。；;]{0,50}感兴趣[，。；;!！]*", "", clean).strip()
+    clean = re.sub(r"我对[^。；;]{0,50}有兴趣[，。；;!！]*", "", clean).strip()
     clean = re.sub(r"(期待|希望)[^。；;]{0,30}(交流|沟通)[。；;!！]*$", "", clean).strip()
     clean = re.sub(r"GitHub[（(]\s*tylygzl\s*[）)]", "GitHub: tylygzl", clean, flags=re.I)
     clean = re.sub(r"GitHub[:：]?\s*tylygzl", "GitHub: tylygzl", clean, flags=re.I)
@@ -1041,7 +1179,7 @@ def match_jd(
 
 
 def _skills_list_to_profile(skills: list[str]) -> dict[str, Any]:
-    return {
+    profile = {
         "name": "候选人",
         "role": "",
         "skills": {
@@ -1051,6 +1189,8 @@ def _skills_list_to_profile(skills: list[str]) -> dict[str, Any]:
         "weaknesses": [],
         "projects": [],
     }
+    profile["target_profile"] = _infer_target_profile(profile)
+    return profile
 
 
 def filter_and_match(jobs: list[dict], skills: list[str], llm: Any | None = None) -> list[dict]:
