@@ -1,16 +1,45 @@
-# 🚀 求职加速器
+# 求职加速器
 
-贴 JD + 经历 + 公司名，告诉你投不投、怎么准备。
+一个面向 BOSS 直聘搜索页的半自动求职助手：用户粘贴简历，插件抓取岗位 JD，本地快速筛选匹配度，只对高潜岗位调用 LLM 生成定制开场白，最后由用户手动确认发送。
 
-## 这是什么
+## 当前主流程
 
-一个基于 Deep Agents 的多 Agent 协作工具。主 Agent 协调三个子 Agent：
+```mermaid
+flowchart LR
+    A["粘贴简历"] --> B["BOSS 搜索页筛选岗位"]
+    B --> C["插件抓取当前可见 JD"]
+    C --> D["本地快筛匹配度"]
+    D --> E{"分数 >= 阈值?"}
+    E -- "否" --> F["展示低匹配原因"]
+    E -- "是" --> G["LLM 生成开场白"]
+    G --> H["用户点击去沟通"]
+    H --> I["自动填入开场白"]
+    I --> J["用户手动确认发送"]
+```
 
-- **jd-analyzer**：拆解 JD → 硬性要求 / 加分项 / 软技能
-- **resume-matcher**：人岗匹配 → 三栏评估（能说硬 / 学两天能说 / 暂时说不了）+ 匹配度打分
-- **interview-predictor**：面试预测 → 从缺口和强项出题，每题标来源
+这个项目不是全自动群发工具。它的边界是：自动筛选、自动生成、自动填入，最终发送动作由用户确认。
 
-## 安装
+## 架构
+
+```text
+plugin/
+  popup.html/js   粘贴简历、匹配阈值、排除关键词、保存配置
+  content.js      抓岗位卡片和详情、调 /match、展示结果、统计、导出 CSV、去沟通填话术
+
+server.py         FastAPI 服务，提供 /health 和 /match
+pipeline.py       简历画像、本地快筛、LLM 开场白、评分兜底
+skills.json       无简历时的默认技能画像
+```
+
+核心策略是两阶段分析：
+
+1. 本地规则先快速判断 JD 和简历画像的匹配度。
+2. 只有高潜岗位才调用 LLM 写开场白，避免每个岗位都排队超时。
+3. 简历会先提取成 skills_profile 并缓存在后端内存里，同一份简历后续复用，不反复发送全文。
+
+## 安装依赖
+
+推荐使用 `uv`：
 
 ```bash
 git clone <repo-url>
@@ -18,40 +47,135 @@ cd job-accelerator
 uv sync
 ```
 
-## 配置
+也可以在自己的 Python 环境中安装 `pyproject.toml` 里的依赖。
+
+## 配置模型
+
+复制模板：
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填入你的 API Key
 ```
 
-## 运行
+推荐使用通用配置，不要把 API Key 写进代码：
 
-**命令行版**：
+```env
+LLM_PROVIDER=deepseek
+LLM_API_KEY=你的模型 API Key
+LLM_MODEL=deepseek-v4-flash
+LLM_BASE_URL=
+```
+
+支持的 `LLM_PROVIDER`：
+
+```text
+none              不调用模型，只用本地兜底
+deepseek          DeepSeek
+volcengine        豆包 / 火山方舟
+qwen              通义千问 / DashScope
+moonshot          Kimi / Moonshot
+zhipu             智谱 GLM
+siliconflow       SiliconFlow 网关
+openrouter        OpenRouter 网关
+openai            OpenAI 官方接口
+openai-compatible 自定义 OpenAI-compatible 网关
+```
+
+豆包 / 火山方舟示例：
+
+```env
+LLM_PROVIDER=volcengine
+LLM_API_KEY=你的火山方舟 API Key
+LLM_MODEL=你的火山方舟模型或 endpoint id
+LLM_BASE_URL=
+```
+
+性能相关默认值：
+
+```env
+LLM_MIN_SCORE=75
+LLM_OPENING=true
+LLM_MATCHER=false
+LLM_RESUME_EXTRACTOR=auto
+RESUME_EXTRACT_ATTEMPTS=1
+LLM_JD_DECOMPOSER=false
+```
+
+含义：
+
+- `LLM_MIN_SCORE=75`：本地快筛 75 分以上才调用 LLM。
+- `LLM_OPENING=true`：让 LLM 只负责高潜岗位的开场白。
+- `LLM_MATCHER=false`：匹配分默认由本地规则算，避免每条岗位都慢。
+- `LLM_RESUME_EXTRACTOR=auto`：有模型时首次提取简历画像，失败就本地兜底。
+
+旧的 `DEEPSEEK_*` 环境变量仍兼容，但新用户建议使用 `LLM_*`。
+
+## 启动后端
+
 ```bash
-uv run python main.py
+uv run python server.py
 ```
 
-**网页版**：
+如果你已经在当前环境安装好依赖，也可以：
+
 ```bash
-uv run streamlit run app.py --server.headless true
+python server.py
 ```
-浏览器打开 `http://localhost:8501`
+
+检查服务：
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+重点看返回里的：
+
+```json
+{
+  "provider": "deepseek",
+  "api_key_configured": true,
+  "two_stage": true,
+  "llm_min_score": 75,
+  "llm_resume_extractor": true,
+  "llm_opening": true
+}
+```
+
+## 加载 Chrome 插件
+
+1. 打开 `chrome://extensions/`
+2. 打开「开发者模式」
+3. 点击「加载已解压的扩展程序」
+4. 选择项目里的 `plugin/` 目录
+5. 打开 BOSS 直聘搜索页
+6. 点击插件图标，粘贴简历，保存配置
+7. 点击开始分析
+
+## 使用建议
+
+先在 BOSS 直聘页面里设置好城市、岗位、薪资、经验、学历等筛选条件，再启动插件分析。
+
+插件会保留低匹配岗位，因为真实求职场景里需要看到“不适合”的原因。匹配阈值主要用于判断哪些岗位值得生成开场白和进入沟通动作。
+
+如果页面出现反爬刷新或岗位列表异常，先降低单次扫描数量，等待页面稳定后继续扫描。
 
 ## 隐私
 
-所有处理在本地完成，不上传、不收集、不存储用户数据。
+- `.env` 已被 `.gitignore` 忽略，不要提交真实 API Key。
+- 简历文本保存在 Chrome 本地存储中，用于插件调用本地后端。
+- 后端会把简历提取成技能画像，默认只缓存在内存里，重启服务后清空。
+- 只有达到阈值的高潜岗位才会把 JD 摘要、匹配技能和精简简历证据发送给你配置的 LLM。
+- 如果 `LLM_PROVIDER=none`，则不会调用外部模型，只使用本地兜底。
 
 ## 已知限制
 
-- deepagents 0.6.12 在 LangSmith Tracing 开启时存在兼容性问题（PR #3993 已修复但未发版），当前代码强制关闭 Tracing
-- Agent 运行需 1~2 分钟，取决于模型响应速度
-- Streamlit 同步框架限制，分析期间页面无进度更新
+- BOSS 直聘页面结构和反爬策略可能变化，插件需要持续维护 DOM 选择器和扫描节奏。
+- 自动填开场白后仍需要用户手动确认发送。
+- 开场白质量取决于简历证据、JD 质量和所选模型。
+- 当前缓存是本地缓存和后端内存缓存，不是跨设备账号系统。
 
-## 技术栈
+## 面试讲法
 
-- Deep Agents（LangGraph）
-- DeepSeek V4
-- Streamlit
-- Python 3.11+
-- uv 包管理器
+这个项目可以概括为：
+
+> 我做了一个半自动求职助手，把重复的岗位筛选、JD 阅读和开场白编写拆成 Chrome 插件、FastAPI 后端和匹配流水线三层。为了避免每个岗位都调用大模型导致超时，我设计了两阶段分析：先本地快筛，再只对高潜岗位调用 LLM 生成开场白，同时把简历提取成可复用的技能画像，减少 token 和等待时间。
