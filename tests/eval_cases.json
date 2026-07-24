@@ -18,9 +18,49 @@
       "require_opening": true
     },
     {
+      "id": "maoyuan_quant_agent_high",
+      "label": "量化 AI Agent 高匹配",
+      "jd_text": "岗位：AI Agent实习生\n公司：茂源量化\n职责：参与内部 AI Agent 工具开发，围绕投研和数据分析场景搭建多 Agent 工作流、Prompt 模板和网页原型。\n要求：熟悉 Python，有 LangGraph、DeepSeek API、Streamlit 或 FastAPI 项目经验，了解 RAG、工具调用和结构化输出。",
+      "expected_score_min": 75,
+      "expected_score_max": 100,
+      "require_opening": true
+    },
+    {
+      "id": "ones_agent_high",
+      "label": "ONES AI Agent 高匹配",
+      "jd_text": "岗位：AI Agent 开发实习生\n公司：ONES\n职责：参与企业协同场景的 AI Agent 开发，完成需求拆解、工作流编排、工具调用、后端接口接入和效果验证。\n要求：熟悉 Python、FastAPI、LangGraph 或 LangChain，有 DeepSeek/GPT API 接入经验，了解 Prompt Engineering、Git 协作和自动化测试。",
+      "expected_score_min": 75,
+      "expected_score_max": 100,
+      "require_opening": true
+    },
+    {
+      "id": "medical_robot_ai_app_mid",
+      "label": "医疗机器人 AI 应用中高匹配",
+      "jd_text": "岗位：ai应用实习生\n公司：爱博医疗机器人\n职责：参与医疗机器人业务中的 AI 应用原型开发，完成知识库问答、模型接口调用、数据处理和内部演示页面。\n要求：熟悉 Python，了解 LangGraph/Agent、DeepSeek 或大模型 API，有 Streamlit/FastAPI 项目经验；了解 PyTorch/TensorFlow 深度学习框架加分。",
+      "expected_score_min": 55,
+      "expected_score_max": 95,
+      "require_opening": true
+    },
+    {
+      "id": "jianying_llm_app_mid_high",
+      "label": "剪映大模型应用中高匹配",
+      "jd_text": "岗位：大模型应用实习生-剪映\n公司：深圳字节跳动\n职责：参与剪映相关大模型应用建设，开发 Prompt、后端 API、插件工具和效果评估流程，支持视频创作场景落地。\n要求：熟悉 Python 或 JavaScript，了解 FastAPI、Chrome Extension、RAG 或大模型 API；有剪映、视频处理或多媒体项目经验加分。",
+      "expected_score_min": 60,
+      "expected_score_max": 95,
+      "require_opening": true
+    },
+    {
       "id": "content_audit_low",
       "label": "内容审核低匹配",
       "jd_text": "岗位：内容鉴审实习生\n公司：空间漫步\n职责：负责图文和短视频内容审核、违规内容标注、日报整理和基础运营协助。\n要求：细心稳定，能接受排班，对社区内容治理有兴趣，有审核或运营经验优先。",
+      "expected_score_min": 0,
+      "expected_score_max": 45,
+      "require_opening": false
+    },
+    {
+      "id": "drone_data_label_low",
+      "label": "无人机数据标注低匹配",
+      "jd_text": "岗位：无人机 AI 数据标注实习生\n公司：天空领域\n职责：负责无人机图像和视频数据标注、目标框绘制、样本质检、标注规范整理和数据交付。\n要求：细心耐心，能熟练使用标注工具，了解无人机或计算机视觉基础优先，不要求后端开发或 Agent 项目经验。",
       "expected_score_min": 0,
       "expected_score_max": 45,
       "require_opening": false
