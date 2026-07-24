@@ -9,9 +9,11 @@ const minScoreEl = document.getElementById("minScore");
 const minScoreLabelEl = document.getElementById("minScoreLabel");
 const excludeKeywordsEl = document.getElementById("excludeKeywords");
 const dailyGoalEl = document.getElementById("dailyGoal");
+const clearCacheBtn = document.getElementById("clearCacheBtn");
 const DEFAULT_API = "http://localhost:8000/match";
 const DEFAULT_MIN_SCORE = 80;
 const DEFAULT_DAILY_GOAL = 10;
+const MATCH_CACHE_PREFIX = "job_match_";
 
 function saveConfig() {
   chrome.storage.local.set({
@@ -66,6 +68,32 @@ saveResumeBtn.addEventListener("click", () => {
 minScoreEl.addEventListener("input", () => {
   updateMinScore(minScoreEl.value);
   chrome.storage.local.set({ min_score: Number(minScoreEl.value) });
+});
+
+clearCacheBtn.addEventListener("click", () => {
+  const confirmed = window.confirm("只清空岗位分析缓存，不会删除简历、配置和已投/跳过/收藏标记。确定清空？");
+  if (!confirmed) return;
+
+  chrome.storage.local.get(null, (items) => {
+    if (chrome.runtime.lastError) {
+      statusEl.textContent = `读取缓存失败：${chrome.runtime.lastError.message}`;
+      return;
+    }
+
+    const cacheKeys = Object.keys(items || {}).filter((key) => key.startsWith(MATCH_CACHE_PREFIX));
+    if (!cacheKeys.length) {
+      statusEl.textContent = "没有可清理的分析缓存";
+      return;
+    }
+
+    chrome.storage.local.remove(cacheKeys, () => {
+      if (chrome.runtime.lastError) {
+        statusEl.textContent = `清理缓存失败：${chrome.runtime.lastError.message}`;
+        return;
+      }
+      statusEl.textContent = `已清空 ${cacheKeys.length} 条分析缓存`;
+    });
+  });
 });
 
 document.getElementById("analyzeBtn").addEventListener("click", async () => {

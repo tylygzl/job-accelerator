@@ -14,6 +14,7 @@
     .section { margin-top: 12px; }
     .hint { margin: 10px 0 14px; font-size: 12px; line-height: 1.5; color: #aeb6c8; }
     .btn { width: 100%; padding: 10px; border: 0; border-radius: 7px; font-size: 14px; font-weight: 700; cursor: pointer; background: #2f80ed; color: #fff; }
+    .btn + .btn { margin-top: 8px; }
     .btn:hover { background: #2369c9; }
     .btn.secondary { background: #202636; border: 1px solid #384255; color: #d8deea; }
     .btn.secondary:hover { background: #283145; }
@@ -50,6 +51,7 @@
   </div>
   <div class="hint">点击后会在 BOSS 页面右侧打开分析面板，后端读取同目录的 skills.json。</div>
   <button class="btn" id="analyzeBtn">分析当前页面岗位</button>
+  <button class="btn secondary" id="clearCacheBtn" type="button">清空分析缓存</button>
   <div class="status" id="status"></div>
   <script src="popup.js"></script>
 </body>
