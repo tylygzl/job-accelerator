@@ -112,6 +112,16 @@ LLM_JD_DECOMPOSER=false
 
 ## 启动后端
 
+Windows 普通用户可以直接双击：
+
+```text
+start_server.bat
+```
+
+脚本会自动进入项目目录并启动 `http://127.0.0.1:8000`。如果没有 `.env`，它会先从 `.env.example` 创建一份 `.env`，提示你填好模型 API Key 后再重新双击。
+
+命令行启动：
+
 ```bash
 uv run python server.py
 ```
