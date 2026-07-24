@@ -356,7 +356,7 @@
     sorted.forEach((job) => renderedJobs.set(cacheKeyFor(job), job));
     container.innerHTML = visibleJobs.length
       ? visibleJobs.map((job) => cardHtml(job)).join("")
-      : '<div class="empty">本页低匹配岗位已清理</div>';
+      : '<div class="empty">本页未达标岗位已隐藏</div>';
     bindCards();
     refreshStats(sorted);
   }
@@ -454,7 +454,7 @@
   <button id="job-accelerator-next">下一页</button>
   <button id="job-accelerator-refresh">刷新</button>
   <button id="job-accelerator-pause">暂停</button>
-  <button id="job-accelerator-clear-low">清理低匹配</button>
+  <button id="job-accelerator-clear-low">隐藏未达标</button>
 </div>
 <div class="stats" id="job-accelerator-stats">已分析 0 个 | 达标 0 | 今日目标 0 | 已投 0 | 跳过 0</div>
 <div id="job-accelerator-results">${count ? '<div class="loading">正在分析...</div>' : '<div class="empty">未检测到岗位</div>'}</div>
