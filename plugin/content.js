@@ -9,6 +9,7 @@
   const PENDING_CHAT_KEY = "job_accelerator_pending_chat";
   const CHAT_HELPER_ID = "job-accelerator-chat-helper";
   const AUTO_OPEN_KEY = "job_accelerator_auto";
+  const AUTO_CONTINUE_KEY = "job_accelerator_auto_continue";
   const MATCH_CACHE_LIMIT = 500;
   const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
   const AUTO_OPEN_TTL_MS = 2 * 60 * 1000;
@@ -20,8 +21,11 @@
   const DETAIL_SCAN_BATCH_LIMIT = 50;
   const JOB_SCAN_LIMIT = 500;
   const SEARCH_LOAD_TARGET = 50;
-  const SEARCH_LOAD_ATTEMPTS = 8;
-  const SEARCH_LOAD_SETTLE_MS = 350;
+  const SEARCH_SCROLL_STEPS = 5;
+  const SEARCH_SCROLL_STEP_MS = 160;
+  const SEARCH_SCROLL_SETTLE_MS = 700;
+  const SESSION_JOBS_KEY = "job_accelerator_session_jobs";
+  const SESSION_JOBS_TTL_MS = 4 * 60 * 60 * 1000;
   const DETAIL_READY_RE = /职位描述|岗位职责|工作职责|任职要求|岗位要求|任职资格|工作内容/;
   const JOB_CARD_SELECTOR = ".job-card-box,.job-card-wrapper";
   const DETAIL_TEXT_SELECTORS = [
@@ -45,8 +49,12 @@
   let pageNo = parseInt(new URL(location.href).searchParams.get("page") || "1", 10);
   const statuses = {};
   const renderedJobs = new Map();
+  let sessionJobs = new Map();
   let latestJobs = [];
   let scanSummary = emptyScanSummary();
+  let analyzing = false;
+  let scanningMore = false;
+  let autoContinueAfterShow = false;
 
   hydrateStatuses().catch(() => {});
   autoFillPendingChat().catch(() => {});
@@ -64,8 +72,9 @@
     if (panel) return;
     await hydrateStatuses();
     hideLowMatches = false;
-    latestJobs = [];
     scanSummary = emptyScanSummary();
+    sessionJobs = isBossSearchPage() ? loadSessionJobs() : new Map();
+    latestJobs = sessionJobList();
     pageNo = parseInt(new URL(location.href).searchParams.get("page") || "1", 10);
     panel = document.createElement("div");
     panel.id = "job-accelerator-panel";
@@ -77,19 +86,24 @@
     const cfg = await storageGet(["exclude_keywords", "resume_text", "min_score", "daily_goal"]);
     activeMinScore = normalizeMinScore(cfg.min_score);
     activeDailyGoal = normalizeDailyGoal(cfg.daily_goal);
-    if (isBossSearchPage()) {
-      await loadSearchCardsTowardTarget(SEARCH_LOAD_TARGET);
-      if (!panel) return;
-    }
     const jobs = extractJobs(parseExcludeKeywords(cfg.exclude_keywords));
-    scanSummary = await buildScanSummary(jobs, String(cfg.resume_text || "") ? simpleHash(String(cfg.resume_text || "")) : "");
+    const newJobs = mergeSessionJobs(jobs);
+    scanSummary = await buildScanSummary(String(cfg.resume_text || "") ? simpleHash(String(cfg.resume_text || "")) : "", jobs.length, newJobs.length);
     renderScanSummary();
     const results = panel.querySelector("#job-accelerator-results");
     if (results) {
-      results.innerHTML = jobs.length ? '<div class="loading">正在分析...</div>' : '<div class="empty">未检测到岗位</div>';
+      results.innerHTML = sessionJobs.size ? '<div class="loading">正在分析当前可见岗位...</div>' : '<div class="empty">未检测到岗位</div>';
     }
-    refreshStats(jobs);
-    analyze(jobs);
+    refreshStats(sessionJobList());
+    const shouldContinue = autoContinueAfterShow;
+    autoContinueAfterShow = false;
+    if (newJobs.length) {
+      const work = analyze(newJobs);
+      if (shouldContinue) work.then(() => continueScan()).catch(() => {});
+    } else {
+      render(sessionJobList());
+      if (shouldContinue) continueScan().catch(() => {});
+    }
   }
 
   function hide() {
@@ -128,8 +142,30 @@
     }
   }
 
-  function scheduleAutoShow() {
+  function rememberAutoContinueScan() {
+    try {
+      sessionStorage.setItem(AUTO_CONTINUE_KEY, JSON.stringify({ expiresAt: Date.now() + AUTO_OPEN_TTL_MS }));
+    } catch (_) {
+      sessionStorage.setItem(AUTO_CONTINUE_KEY, "1");
+    }
+  }
+
+  function consumeAutoContinueScan() {
+    const raw = sessionStorage.getItem(AUTO_CONTINUE_KEY);
+    if (!raw) return false;
+    sessionStorage.removeItem(AUTO_CONTINUE_KEY);
+    if (raw === "1") return true;
+    try {
+      const data = JSON.parse(raw);
+      return Number(data?.expiresAt || 0) > Date.now();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function scheduleAutoShow(continueAfterShow = false) {
     if (visible || panel) return;
+    autoContinueAfterShow = autoContinueAfterShow || continueAfterShow;
     const wait = setInterval(() => {
       if (document.querySelectorAll(JOB_CARD_SELECTOR).length > 0) {
         clearInterval(wait);
@@ -140,46 +176,86 @@
   }
 
   if (isBossSearchPage() && consumeAutoOpenPanel()) {
-    scheduleAutoShow();
+    scheduleAutoShow(consumeAutoContinueScan());
   }
 
   function emptyScanSummary() {
     return {
       target: SEARCH_LOAD_TARGET,
-      found: 0,
+      visible: 0,
+      total: 0,
+      added: 0,
       cached: 0,
       fresh: 0,
       loadedBefore: 0,
       loadedAfter: 0,
-      loadTried: false,
+      scrolled: false,
     };
   }
 
-  async function loadSearchCardsTowardTarget(target) {
-    const before = document.querySelectorAll(JOB_CARD_SELECTOR).length;
-    scanSummary.loadedBefore = before;
-    scanSummary.loadedAfter = before;
-    if (!isBossSearchPage() || before >= target) return;
+  function sessionJobList() {
+    return Array.from(sessionJobs.values());
+  }
 
-    const scroller = findJobListScroller();
-    if (!scroller) return;
+  function mergeSessionJobs(jobs) {
+    const added = [];
+    jobs.forEach((job) => {
+      const key = cacheKeyFor(job);
+      const existing = sessionJobs.get(key);
+      if (existing) {
+        sessionJobs.set(key, mergeJobSnapshot(existing, job));
+        return;
+      }
+      sessionJobs.set(key, job);
+      added.push(job);
+    });
+    saveSessionJobs();
+    return added;
+  }
 
-    scanSummary.loadTried = true;
-    renderScanSummary("正在尝试加载更多岗位...");
-    let lastCount = before;
-    let stableRounds = 0;
+  function mergeJobSnapshot(existing, fresh) {
+    return {
+      ...fresh,
+      ...existing,
+      listIndex: fresh.listIndex,
+      url: fresh.url || existing.url,
+      jd_text: existing.detailLoaded ? existing.jd_text : fresh.jd_text || existing.jd_text,
+      detailSource: existing.detailLoaded ? existing.detailSource : fresh.detailSource || existing.detailSource,
+    };
+  }
 
-    for (let attempt = 0; attempt < SEARCH_LOAD_ATTEMPTS; attempt += 1) {
-      if (!panel || document.querySelectorAll(JOB_CARD_SELECTOR).length >= target) break;
-      scrollJobList(scroller);
-      await sleep(SEARCH_LOAD_SETTLE_MS);
-      const nextCount = document.querySelectorAll(JOB_CARD_SELECTOR).length;
-      scanSummary.loadedAfter = nextCount;
-      renderScanSummary("正在尝试加载更多岗位...");
-      if (nextCount <= lastCount) stableRounds += 1;
-      else stableRounds = 0;
-      lastCount = nextCount;
-      if (stableRounds >= 3) break;
+  function loadSessionJobs() {
+    try {
+      const raw = sessionStorage.getItem(SESSION_JOBS_KEY);
+      if (!raw) return new Map();
+      const data = JSON.parse(raw);
+      const sameSearch = data?.signature === searchSignature();
+      const fresh = Date.now() - Number(data?.savedAt || 0) < SESSION_JOBS_TTL_MS;
+      if (!sameSearch || !fresh || !Array.isArray(data.jobs)) return new Map();
+      return new Map(data.jobs.map((job) => [cacheKeyFor(job), job]));
+    } catch (_) {
+      return new Map();
+    }
+  }
+
+  function saveSessionJobs() {
+    try {
+      const jobs = sessionJobList().slice(-JOB_SCAN_LIMIT);
+      sessionStorage.setItem(SESSION_JOBS_KEY, JSON.stringify({
+        signature: searchSignature(),
+        savedAt: Date.now(),
+        jobs,
+      }));
+    } catch (_) {}
+  }
+
+  function searchSignature() {
+    try {
+      const url = new URL(location.href);
+      url.searchParams.delete("page");
+      return `${url.origin}${url.pathname}?${url.searchParams.toString()}`;
+    } catch (_) {
+      return location.href;
     }
   }
 
@@ -204,10 +280,21 @@
     return pageScroller && pageScroller.scrollHeight > pageScroller.clientHeight + 80 ? pageScroller : null;
   }
 
-  function scrollJobList(scroller) {
+  async function scrollJobListOneScreen() {
+    const scroller = findJobListScroller();
+    if (!scroller) return false;
     const distance = Math.max(scroller.clientHeight * 0.85, 520);
-    scroller.scrollTop = Math.min(scroller.scrollTop + distance, scroller.scrollHeight);
-    scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
+    const stepDistance = distance / SEARCH_SCROLL_STEPS;
+    scanSummary.scrolled = true;
+    renderScanSummary("正在慢速下滑加载下一批...");
+    for (let step = 0; step < SEARCH_SCROLL_STEPS; step += 1) {
+      scroller.scrollTop = Math.min(scroller.scrollTop + stepDistance, scroller.scrollHeight);
+      scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await sleep(SEARCH_SCROLL_STEP_MS);
+    }
+    await sleep(SEARCH_SCROLL_SETTLE_MS);
+    scanSummary.loadedAfter = document.querySelectorAll(JOB_CARD_SELECTOR).length;
+    return true;
   }
 
   function countCardsInside(node) {
@@ -218,7 +305,8 @@
     return Math.max(0, (node.scrollHeight || 0) - (node.clientHeight || 0));
   }
 
-  async function buildScanSummary(jobs, resumeKey) {
+  async function buildScanSummary(resumeKey, visibleCount = 0, addedCount = 0) {
+    const jobs = sessionJobList();
     const keys = jobs.map((job) => cacheKeyFor(job));
     const items = keys.length ? await storageGet(keys) : {};
     let cached = 0;
@@ -228,7 +316,9 @@
     });
     return {
       ...scanSummary,
-      found: jobs.length,
+      visible: visibleCount,
+      total: jobs.length,
+      added: addedCount,
       cached,
       fresh: Math.max(0, jobs.length - cached),
     };
@@ -237,13 +327,9 @@
   function renderScanSummary(prefix = "") {
     const node = panel?.querySelector("#job-accelerator-scan-summary");
     if (!node) return;
-    const loadedText = scanSummary.loadTried
-      ? `页面已加载 ${scanSummary.loadedAfter || scanSummary.loadedBefore} 个`
-      : `当前页面 ${scanSummary.loadedBefore || scanSummary.found || 0} 个`;
-    const requestText = scanSummary.found
-      ? `本次发现 ${scanSummary.found} 个 | 缓存 ${scanSummary.cached} | 待请求 ${scanSummary.fresh}`
-      : loadedText;
-    node.textContent = `${prefix ? `${prefix} ` : ""}${requestText} | 本次目标 ${scanSummary.target} | 缓存上限 ${MATCH_CACHE_LIMIT}`;
+    const visible = scanSummary.visible || document.querySelectorAll(JOB_CARD_SELECTOR).length;
+    const textValue = `当前可见 ${visible} 个 | 本次累计 ${scanSummary.total} 个 | 新增 ${scanSummary.added} 个 | 缓存 ${scanSummary.cached} | 待请求 ${scanSummary.fresh} | 目标 ${scanSummary.target}`;
+    node.textContent = `${prefix ? `${prefix} ` : ""}${textValue}`;
   }
 
   function extractJobs(excludeKeywords = []) {
@@ -317,52 +403,66 @@
     const container = panel?.querySelector("#job-accelerator-results");
     if (!container) return;
     if (!jobs.length) {
-      container.innerHTML = '<div class="empty">未检测到岗位卡片或 JD 详情</div>';
+      if (sessionJobs.size) render(sessionJobList());
+      else container.innerHTML = '<div class="empty">未检测到岗位卡片或 JD 详情</div>';
       return;
     }
+    if (analyzing) return;
+    analyzing = true;
+    setContinueButtonBusy(true);
+    let resumeKeyForSummary = "";
 
-    const cfg = await storageGet(["apiUrl", "resume_text", "min_score", "daily_goal"]);
-    const api = cfg.apiUrl || DEFAULT_API;
-    const resumeText = String(cfg.resume_text || "");
-    const resumeKey = resumeText ? simpleHash(resumeText) : "";
-    activeMinScore = normalizeMinScore(cfg.min_score);
-    activeDailyGoal = normalizeDailyGoal(cfg.daily_goal);
-    jobs = await enrichSearchJobsWithDetails(jobs, resumeKey);
-    const completed = new Map();
-    const currentJobs = () => jobs.map((item) => completed.get(cacheKeyFor(item)) || item);
+    try {
+      const cfg = await storageGet(["apiUrl", "resume_text", "min_score", "daily_goal"]);
+      const api = cfg.apiUrl || DEFAULT_API;
+      const resumeText = String(cfg.resume_text || "");
+      const resumeKey = resumeText ? simpleHash(resumeText) : "";
+      resumeKeyForSummary = resumeKey;
+      activeMinScore = normalizeMinScore(cfg.min_score);
+      activeDailyGoal = normalizeDailyGoal(cfg.daily_goal);
+      jobs = await enrichSearchJobsWithDetails(jobs, resumeKey);
+      jobs.forEach((job) => sessionJobs.set(cacheKeyFor(job), mergeJobSnapshot(sessionJobs.get(cacheKeyFor(job)) || {}, job)));
+      saveSessionJobs();
 
-    const analyzeOne = async (job) => {
-      const cacheKey = cacheKeyFor(job);
-      const cachedEntry = await getUsableCachedEntry(job, resumeKey);
-      if (cachedEntry) {
-        const entry = normalizeCacheEntry(cachedEntry, job);
-        return { ...job, ...entry.job, match: entry.match, cached: true };
+      const analyzeOne = async (job) => {
+        const cacheKey = cacheKeyFor(job);
+        const cachedEntry = await getUsableCachedEntry(job, resumeKey);
+        if (cachedEntry) {
+          const entry = normalizeCacheEntry(cachedEntry, job);
+          return { ...job, ...entry.job, match: entry.match, cached: true };
+        }
+
+        try {
+          const response = await fetchWithTimeout(api, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ jd_text: job.jd_text, resume_text: resumeText }),
+          });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const data = await response.json();
+          await storageSet({ [cacheKey]: makeCacheEntry(job, data, resumeKey) });
+          pruneMatchCache().catch(() => {});
+          return { ...job, match: data };
+        } catch (error) {
+          return { ...job, error: formatAnalyzeError(error, api) };
+        }
+      };
+
+      for (let index = 0; index < jobs.length; index += 3) {
+        await waitIfPaused();
+        const batch = jobs.slice(index, index + 3);
+        await Promise.all(batch.map(async (job) => {
+          const result = await analyzeOne(job);
+          sessionJobs.set(cacheKeyFor(job), result);
+          saveSessionJobs();
+          render(sessionJobList());
+        }));
       }
-
-      try {
-        const response = await fetchWithTimeout(api, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ jd_text: job.jd_text, resume_text: resumeText }),
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-        await storageSet({ [cacheKey]: makeCacheEntry(job, data, resumeKey) });
-        pruneMatchCache().catch(() => {});
-        return { ...job, match: data };
-      } catch (error) {
-        return { ...job, error: formatAnalyzeError(error, api) };
-      }
-    };
-
-    for (let index = 0; index < jobs.length; index += 3) {
-      await waitIfPaused();
-      const batch = jobs.slice(index, index + 3);
-      await Promise.all(batch.map(async (job) => {
-        const result = await analyzeOne(job);
-        completed.set(cacheKeyFor(job), result);
-        render(currentJobs());
-      }));
+    } finally {
+      scanSummary = await buildScanSummary(resumeKeyForSummary, scanSummary.visible, 0);
+      renderScanSummary("本批分析完成。");
+      analyzing = false;
+      setContinueButtonBusy(false);
     }
   }
 
@@ -648,7 +748,7 @@
 <div class="pager">
   <button id="job-accelerator-prev"${pageNo <= 1 ? " disabled" : ""}>上一页</button>
   <span>第 ${pageNo} 页</span>
-  <button id="job-accelerator-next">下一页</button>
+  <button id="job-accelerator-next">继续扫描</button>
   <button id="job-accelerator-refresh">刷新</button>
   <button id="job-accelerator-pause">暂停</button>
   <button id="job-accelerator-clear-low">隐藏未达标</button>
@@ -666,7 +766,7 @@
       setTimeout(show, 100);
     });
     document.getElementById("job-accelerator-prev")?.addEventListener("click", () => go(pageNo - 1));
-    document.getElementById("job-accelerator-next")?.addEventListener("click", () => go(pageNo + 1));
+    document.getElementById("job-accelerator-next")?.addEventListener("click", continueScan);
     document.getElementById("job-accelerator-export")?.addEventListener("click", exportCsv);
     document.getElementById("job-accelerator-pause")?.addEventListener("click", () => setPaused(!paused));
     document.getElementById("job-accelerator-clear-low")?.addEventListener("click", () => {
@@ -674,6 +774,58 @@
       render(latestJobs);
       const button = document.getElementById("job-accelerator-clear-low");
       if (button) button.disabled = true;
+    });
+  }
+
+  async function continueScan() {
+    if (!panel || analyzing || scanningMore) return;
+    scanningMore = true;
+    setContinueButtonBusy(true);
+    try {
+      const cfg = await storageGet(["exclude_keywords", "resume_text", "min_score", "daily_goal"]);
+      activeMinScore = normalizeMinScore(cfg.min_score);
+      activeDailyGoal = normalizeDailyGoal(cfg.daily_goal);
+      const resumeKey = String(cfg.resume_text || "") ? simpleHash(String(cfg.resume_text || "")) : "";
+      const excludeKeywords = parseExcludeKeywords(cfg.exclude_keywords);
+      const beforeJobs = extractJobs(excludeKeywords);
+      const beforeNew = mergeSessionJobs(beforeJobs);
+
+      if (isBossSearchPage()) {
+        scanSummary = await buildScanSummary(resumeKey, beforeJobs.length, beforeNew.length);
+        renderScanSummary(beforeNew.length ? "先分析当前补位新增。" : "当前可见岗位已记录。");
+        if (beforeNew.length) await analyze(beforeNew);
+        await scrollJobListOneScreen();
+      }
+
+      const afterJobs = extractJobs(excludeKeywords);
+      const afterNew = mergeSessionJobs(afterJobs);
+      const newJobs = uniqueJobs(afterNew);
+      scanSummary = await buildScanSummary(resumeKey, afterJobs.length, newJobs.length);
+      renderScanSummary(newJobs.length ? "下滑后发现新增岗位，开始分析。" : "下滑后没有发现新增岗位。");
+
+      if (newJobs.length) await analyze(newJobs);
+      else render(sessionJobList());
+    } finally {
+      scanningMore = false;
+      setContinueButtonBusy(false);
+    }
+  }
+
+  function setContinueButtonBusy(busy) {
+    const button = document.getElementById("job-accelerator-next");
+    if (!button) return;
+    const isBusy = Boolean(busy || analyzing || scanningMore);
+    button.disabled = isBusy;
+    button.textContent = analyzing ? "分析中" : scanningMore ? "扫描中" : "继续扫描";
+  }
+
+  function uniqueJobs(jobs) {
+    const seen = new Set();
+    return jobs.filter((job) => {
+      const key = cacheKeyFor(job);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     });
   }
 
@@ -756,6 +908,7 @@
 
     await storageSet({ [PENDING_CHAT_KEY]: makePendingChat(job) });
     rememberAutoOpenPanel();
+    rememberAutoContinueScan();
     clickElement(chatButton);
     showCardInfo(card, "请在 BOSS 弹窗中手动确认，进入聊天页后会自动填入开场白。");
     const opened = await waitForChatPageAndFill();
@@ -855,7 +1008,12 @@
       if (isBossChatPage()) {
         autoFillPendingChat().catch(() => {});
       } else if (isBossSearchPage() && consumeAutoOpenPanel()) {
-        scheduleAutoShow();
+        const shouldContinue = consumeAutoContinueScan();
+        if (panel && visible && shouldContinue) {
+          continueScan().catch(() => {});
+        } else {
+          scheduleAutoShow(shouldContinue);
+        }
       }
     }, 500);
   }
@@ -888,6 +1046,7 @@
 
   function returnToSearchPage(pending) {
     rememberAutoOpenPanel();
+    rememberAutoContinueScan();
     const target = String(pending?.searchUrl || "");
     if (target) {
       location.href = target;
