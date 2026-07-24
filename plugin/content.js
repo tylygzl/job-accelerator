@@ -19,6 +19,9 @@
   const DETAIL_SCAN_COOLDOWN_MS = 1000;
   const DETAIL_SCAN_BATCH_LIMIT = 50;
   const JOB_SCAN_LIMIT = 500;
+  const SEARCH_LOAD_TARGET = 50;
+  const SEARCH_LOAD_ATTEMPTS = 8;
+  const SEARCH_LOAD_SETTLE_MS = 350;
   const DETAIL_READY_RE = /职位描述|岗位职责|工作职责|任职要求|岗位要求|任职资格|工作内容/;
   const JOB_CARD_SELECTOR = ".job-card-box,.job-card-wrapper";
   const DETAIL_TEXT_SELECTORS = [
@@ -43,6 +46,7 @@
   const statuses = {};
   const renderedJobs = new Map();
   let latestJobs = [];
+  let scanSummary = emptyScanSummary();
 
   hydrateStatuses().catch(() => {});
   autoFillPendingChat().catch(() => {});
@@ -61,15 +65,29 @@
     await hydrateStatuses();
     hideLowMatches = false;
     latestJobs = [];
+    scanSummary = emptyScanSummary();
     pageNo = parseInt(new URL(location.href).searchParams.get("page") || "1", 10);
-    const cfg = await storageGet(["exclude_keywords"]);
-    const jobs = extractJobs(parseExcludeKeywords(cfg.exclude_keywords));
     panel = document.createElement("div");
     panel.id = "job-accelerator-panel";
-    panel.innerHTML = shellHtml(jobs.length);
+    panel.innerHTML = shellHtml(0, "正在读取页面岗位...");
     document.body.appendChild(panel);
     visible = true;
     bindShell();
+
+    const cfg = await storageGet(["exclude_keywords", "resume_text", "min_score", "daily_goal"]);
+    activeMinScore = normalizeMinScore(cfg.min_score);
+    activeDailyGoal = normalizeDailyGoal(cfg.daily_goal);
+    if (isBossSearchPage()) {
+      await loadSearchCardsTowardTarget(SEARCH_LOAD_TARGET);
+      if (!panel) return;
+    }
+    const jobs = extractJobs(parseExcludeKeywords(cfg.exclude_keywords));
+    scanSummary = await buildScanSummary(jobs, String(cfg.resume_text || "") ? simpleHash(String(cfg.resume_text || "")) : "");
+    renderScanSummary();
+    const results = panel.querySelector("#job-accelerator-results");
+    if (results) {
+      results.innerHTML = jobs.length ? '<div class="loading">正在分析...</div>' : '<div class="empty">未检测到岗位</div>';
+    }
     refreshStats(jobs);
     analyze(jobs);
   }
@@ -110,7 +128,8 @@
     }
   }
 
-  if (consumeAutoOpenPanel()) {
+  function scheduleAutoShow() {
+    if (visible || panel) return;
     const wait = setInterval(() => {
       if (document.querySelectorAll(JOB_CARD_SELECTOR).length > 0) {
         clearInterval(wait);
@@ -118,6 +137,113 @@
       }
     }, 300);
     setTimeout(() => clearInterval(wait), 10000);
+  }
+
+  if (isBossSearchPage() && consumeAutoOpenPanel()) {
+    scheduleAutoShow();
+  }
+
+  function emptyScanSummary() {
+    return {
+      target: SEARCH_LOAD_TARGET,
+      found: 0,
+      cached: 0,
+      fresh: 0,
+      loadedBefore: 0,
+      loadedAfter: 0,
+      loadTried: false,
+    };
+  }
+
+  async function loadSearchCardsTowardTarget(target) {
+    const before = document.querySelectorAll(JOB_CARD_SELECTOR).length;
+    scanSummary.loadedBefore = before;
+    scanSummary.loadedAfter = before;
+    if (!isBossSearchPage() || before >= target) return;
+
+    const scroller = findJobListScroller();
+    if (!scroller) return;
+
+    scanSummary.loadTried = true;
+    renderScanSummary("正在尝试加载更多岗位...");
+    let lastCount = before;
+    let stableRounds = 0;
+
+    for (let attempt = 0; attempt < SEARCH_LOAD_ATTEMPTS; attempt += 1) {
+      if (!panel || document.querySelectorAll(JOB_CARD_SELECTOR).length >= target) break;
+      scrollJobList(scroller);
+      await sleep(SEARCH_LOAD_SETTLE_MS);
+      const nextCount = document.querySelectorAll(JOB_CARD_SELECTOR).length;
+      scanSummary.loadedAfter = nextCount;
+      renderScanSummary("正在尝试加载更多岗位...");
+      if (nextCount <= lastCount) stableRounds += 1;
+      else stableRounds = 0;
+      lastCount = nextCount;
+      if (stableRounds >= 3) break;
+    }
+  }
+
+  function findJobListScroller() {
+    const cards = Array.from(document.querySelectorAll(JOB_CARD_SELECTOR));
+    const candidates = [];
+    cards.forEach((card) => {
+      let node = card.parentElement;
+      while (node && node !== document.body && node !== document.documentElement) {
+        const style = window.getComputedStyle(node);
+        const canScroll = node.scrollHeight > node.clientHeight + 80;
+        if (canScroll && /auto|scroll|overlay/.test(style.overflowY)) candidates.push(node);
+        node = node.parentElement;
+      }
+    });
+
+    const unique = uniqueElements(candidates);
+    unique.sort((a, b) => countCardsInside(b) - countCardsInside(a) || scrollRoom(b) - scrollRoom(a));
+    if (unique[0]) return unique[0];
+
+    const pageScroller = document.scrollingElement || document.documentElement;
+    return pageScroller && pageScroller.scrollHeight > pageScroller.clientHeight + 80 ? pageScroller : null;
+  }
+
+  function scrollJobList(scroller) {
+    const distance = Math.max(scroller.clientHeight * 0.85, 520);
+    scroller.scrollTop = Math.min(scroller.scrollTop + distance, scroller.scrollHeight);
+    scroller.dispatchEvent(new Event("scroll", { bubbles: true }));
+  }
+
+  function countCardsInside(node) {
+    return node.querySelectorAll?.(JOB_CARD_SELECTOR).length || 0;
+  }
+
+  function scrollRoom(node) {
+    return Math.max(0, (node.scrollHeight || 0) - (node.clientHeight || 0));
+  }
+
+  async function buildScanSummary(jobs, resumeKey) {
+    const keys = jobs.map((job) => cacheKeyFor(job));
+    const items = keys.length ? await storageGet(keys) : {};
+    let cached = 0;
+    jobs.forEach((job) => {
+      const value = items[cacheKeyFor(job)];
+      if (value && cacheIsUsable(value, resumeKey)) cached += 1;
+    });
+    return {
+      ...scanSummary,
+      found: jobs.length,
+      cached,
+      fresh: Math.max(0, jobs.length - cached),
+    };
+  }
+
+  function renderScanSummary(prefix = "") {
+    const node = panel?.querySelector("#job-accelerator-scan-summary");
+    if (!node) return;
+    const loadedText = scanSummary.loadTried
+      ? `页面已加载 ${scanSummary.loadedAfter || scanSummary.loadedBefore} 个`
+      : `当前页面 ${scanSummary.loadedBefore || scanSummary.found || 0} 个`;
+    const requestText = scanSummary.found
+      ? `本次发现 ${scanSummary.found} 个 | 缓存 ${scanSummary.cached} | 待请求 ${scanSummary.fresh}`
+      : loadedText;
+    node.textContent = `${prefix ? `${prefix} ` : ""}${requestText} | 本次目标 ${scanSummary.target} | 缓存上限 ${MATCH_CACHE_LIMIT}`;
   }
 
   function extractJobs(excludeKeywords = []) {
@@ -244,6 +370,7 @@
     if (!isBossSearchPage()) return jobs;
     const enriched = [];
     let scannedInBatch = 0;
+    let batchStartIndex = 0;
     for (let index = 0; index < jobs.length; index += 1) {
       if (!panel) return [...enriched, ...jobs.slice(index)];
       await waitIfPaused();
@@ -259,10 +386,12 @@
       if (scannedInBatch >= DETAIL_SCAN_BATCH_LIMIT) {
         await pauseScanBatch(index, jobs.length);
         scannedInBatch = 0;
+        batchStartIndex = index;
         await waitIfPaused();
       }
 
-      updateScanProgress(index + 1, jobs.length, job, "读取右侧 JD", scannedInBatch + 1, DETAIL_SCAN_BATCH_LIMIT);
+      const batchTotal = Math.min(DETAIL_SCAN_BATCH_LIMIT, jobs.length - batchStartIndex);
+      updateScanProgress(index + 1, jobs.length, job, "读取右侧 JD", scannedInBatch + 1, batchTotal);
       const detailText = await readRightDetailForJob(job);
       scannedInBatch += 1;
       enriched.push(
@@ -279,17 +408,18 @@
     setPaused(true);
     const container = panel?.querySelector("#job-accelerator-results");
     if (container) {
-      container.innerHTML = `<div class="loading">已读取本批 ${DETAIL_SCAN_BATCH_LIMIT} 个右侧 JD（总进度 ${index}/${total}），自动暂停保护页面。<br>稍等几秒后点击“继续”扫描下一批。</div>`;
+      container.innerHTML = `<div class="loading">已读取本批上限 ${DETAIL_SCAN_BATCH_LIMIT} 个右侧 JD，本次处理 ${index}/${total}。<br>自动暂停保护页面，稍等几秒后点击“继续”扫描下一批。</div>`;
     }
   }
 
   function updateScanProgress(current, total, job, action, batchCurrent = 0, batchTotal = 0) {
     const container = panel?.querySelector("#job-accelerator-results");
     if (!container) return;
-    const progress = batchTotal
-      ? `当前批次 ${Math.min(batchCurrent, batchTotal)}/${batchTotal} · 总进度 ${current}/${total}`
-      : `总进度 ${current}/${total}`;
-    container.innerHTML = `<div class="loading">${esc(action)} ${esc(progress)}<br>${esc(job.title || "")} · ${esc(job.company || "")}</div>`;
+    const parts = [];
+    if (batchTotal) parts.push(`当前批次 ${Math.min(batchCurrent, batchTotal)}/${batchTotal}`);
+    parts.push(`本次处理 ${current}/${total}`);
+    parts.push(`本次目标 ${SEARCH_LOAD_TARGET}`);
+    container.innerHTML = `<div class="loading">${esc(action)}<br>${esc(parts.join(" · "))}<br>${esc(job.title || "")} · ${esc(job.company || "")}</div>`;
   }
 
   async function readRightDetailForJob(job) {
@@ -480,7 +610,7 @@
     return "";
   }
 
-  function shellHtml(count) {
+  function shellHtml(_count, loadingText = "正在分析...") {
     return `<style>
 #job-accelerator-panel{position:fixed;top:0;right:0;width:390px;height:100vh;background:#151820;color:#e6e8ee;z-index:999999;box-shadow:-4px 0 24px #0008;overflow-y:auto;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:18px}
 #job-accelerator-panel h3{margin:0 0 12px;font-size:16px;color:#fff}
@@ -490,6 +620,7 @@
 #job-accelerator-panel .pager button:disabled{opacity:.35;cursor:not-allowed}
 #job-accelerator-panel .pager span{font-size:12px;color:#aeb6c8}
 #job-accelerator-panel .stats{font-size:12px;line-height:1.55;color:#c5ccda;background:#202636;border:1px solid #384255;border-radius:7px;padding:8px 10px;margin-bottom:12px}
+#job-accelerator-panel .scan-summary{font-size:11px;line-height:1.45;color:#8fb8ff;margin:-4px 0 12px}
 #job-accelerator-panel .card{background:#202636;padding:12px;margin:10px 0;border-radius:8px;border-left:4px solid #e5534b;cursor:pointer}
 #job-accelerator-panel .card.high{border-left-color:#25b47e}
 #job-accelerator-panel .card.mid{border-left-color:#e6b84a}
@@ -523,7 +654,8 @@
   <button id="job-accelerator-clear-low">隐藏未达标</button>
 </div>
 <div class="stats" id="job-accelerator-stats">已分析 0 个 | 达标 0 | 今日目标 0 | 已投 0 | 跳过 0</div>
-<div id="job-accelerator-results">${count ? '<div class="loading">正在分析...</div>' : '<div class="empty">未检测到岗位</div>'}</div>
+<div class="scan-summary" id="job-accelerator-scan-summary">${esc(loadingText)}</div>
+<div id="job-accelerator-results"><div class="loading">${esc(loadingText)}</div></div>
 <div class="footer"><button class="export" id="job-accelerator-export">导出 CSV</button></div>`;
   }
 
@@ -623,6 +755,7 @@
     if (!chatButton) throw new Error("找不到 BOSS 的立即沟通按钮");
 
     await storageSet({ [PENDING_CHAT_KEY]: makePendingChat(job) });
+    rememberAutoOpenPanel();
     clickElement(chatButton);
     showCardInfo(card, "请在 BOSS 弹窗中手动确认，进入聊天页后会自动填入开场白。");
     const opened = await waitForChatPageAndFill();
@@ -719,7 +852,11 @@
     setInterval(() => {
       if (location.href === lastHref) return;
       lastHref = location.href;
-      if (isBossChatPage()) autoFillPendingChat().catch(() => {});
+      if (isBossChatPage()) {
+        autoFillPendingChat().catch(() => {});
+      } else if (isBossSearchPage() && consumeAutoOpenPanel()) {
+        scheduleAutoShow();
+      }
     }, 500);
   }
 
