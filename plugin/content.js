@@ -9,6 +9,7 @@
   const PENDING_CHAT_KEY = "job_accelerator_pending_chat";
   const CHAT_HELPER_ID = "job-accelerator-chat-helper";
   const AUTO_OPEN_KEY = "job_accelerator_auto";
+  const MATCH_CACHE_LIMIT = 500;
   const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
   const AUTO_OPEN_TTL_MS = 2 * 60 * 1000;
   const REQUEST_TIMEOUT_MS = 60 * 1000;
@@ -16,8 +17,8 @@
   const DETAIL_SCAN_TIMEOUT_MS = 5 * 1000;
   const DETAIL_SCAN_INTERVAL_MS = 200;
   const DETAIL_SCAN_COOLDOWN_MS = 1000;
-  const DETAIL_SCAN_BATCH_LIMIT = 15;
-  const JOB_SCAN_LIMIT = 50;
+  const DETAIL_SCAN_BATCH_LIMIT = 50;
+  const JOB_SCAN_LIMIT = 500;
   const DETAIL_READY_RE = /职位描述|岗位职责|工作职责|任职要求|岗位要求|任职资格|工作内容/;
   const JOB_CARD_SELECTOR = ".job-card-box,.job-card-wrapper";
   const DETAIL_TEXT_SELECTORS = [
@@ -221,6 +222,7 @@
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const data = await response.json();
         await storageSet({ [cacheKey]: makeCacheEntry(job, data, resumeKey) });
+        pruneMatchCache().catch(() => {});
         return { ...job, match: data };
       } catch (error) {
         return { ...job, error: formatAnalyzeError(error, api) };
@@ -246,10 +248,10 @@
       if (!panel) return [...enriched, ...jobs.slice(index)];
       await waitIfPaused();
       const job = jobs[index];
-      updateScanProgress(index + 1, jobs.length, job, "读取右侧 JD");
 
       const cachedEntry = await getUsableCachedEntry(job, resumeKey);
       if (cachedEntry) {
+        updateScanProgress(index + 1, jobs.length, job, "命中缓存");
         enriched.push(job);
         continue;
       }
@@ -260,6 +262,7 @@
         await waitIfPaused();
       }
 
+      updateScanProgress(index + 1, jobs.length, job, "读取右侧 JD", scannedInBatch + 1, DETAIL_SCAN_BATCH_LIMIT);
       const detailText = await readRightDetailForJob(job);
       scannedInBatch += 1;
       enriched.push(
@@ -276,14 +279,17 @@
     setPaused(true);
     const container = panel?.querySelector("#job-accelerator-results");
     if (container) {
-      container.innerHTML = `<div class="loading">已读取 ${index}/${total} 个右侧 JD，自动暂停保护页面。<br>稍等几秒后点击“继续”扫描下一批。</div>`;
+      container.innerHTML = `<div class="loading">已读取本批 ${DETAIL_SCAN_BATCH_LIMIT} 个右侧 JD（总进度 ${index}/${total}），自动暂停保护页面。<br>稍等几秒后点击“继续”扫描下一批。</div>`;
     }
   }
 
-  function updateScanProgress(current, total, job, action) {
+  function updateScanProgress(current, total, job, action, batchCurrent = 0, batchTotal = 0) {
     const container = panel?.querySelector("#job-accelerator-results");
     if (!container) return;
-    container.innerHTML = `<div class="loading">${esc(action)} ${current}/${total}<br>${esc(job.title || "")} · ${esc(job.company || "")}</div>`;
+    const progress = batchTotal
+      ? `当前批次 ${Math.min(batchCurrent, batchTotal)}/${batchTotal} · 总进度 ${current}/${total}`
+      : `总进度 ${current}/${total}`;
+    container.innerHTML = `<div class="loading">${esc(action)} ${esc(progress)}<br>${esc(job.title || "")} · ${esc(job.company || "")}</div>`;
   }
 
   async function readRightDetailForJob(job) {
@@ -1134,6 +1140,20 @@
       job: fallbackJob || {},
       match: value || {},
     };
+  }
+
+  async function pruneMatchCache() {
+    const items = await storageGet(null);
+    const entries = Object.entries(items || {})
+      .filter(([key]) => key.startsWith(MATCH_CACHE_PREFIX))
+      .map(([key, value]) => ({
+        key,
+        analyzedAt: Date.parse(value?.analyzedAt || "") || 0,
+      }))
+      .sort((a, b) => b.analyzedAt - a.analyzedAt);
+
+    if (entries.length <= MATCH_CACHE_LIMIT) return;
+    await storageRemove(entries.slice(MATCH_CACHE_LIMIT).map((entry) => entry.key));
   }
 
   function collectStatuses(items) {
