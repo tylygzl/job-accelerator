@@ -189,8 +189,7 @@
         await storageSet({ [cacheKey]: makeCacheEntry(job, data, resumeKey) });
         return { ...job, match: data };
       } catch (error) {
-        const reason = error?.name === "AbortError" ? `timeout after ${REQUEST_TIMEOUT_MS / 1000}s` : error.message;
-        return { ...job, error: `Request failed: ${reason}` };
+        return { ...job, error: formatAnalyzeError(error, api) };
       }
     };
 
@@ -1082,6 +1081,26 @@
 
   function hasStorageAccess() {
     return typeof chrome !== "undefined" && Boolean(chrome.storage?.local);
+  }
+
+  function formatAnalyzeError(error, api) {
+    const message = String(error?.message || error || "");
+    if (error?.name === "AbortError") {
+      return `请求超时：后端或 LLM 超过 ${REQUEST_TIMEOUT_MS / 1000}s 未返回。请检查 DeepSeek/API、代理，或稍后点刷新继续。`;
+    }
+    if (/Failed to fetch|NetworkError|Load failed|fetch/i.test(message)) {
+      return `后端未连接：请先运行 python server.py，再刷新插件。当前 API：${api}`;
+    }
+    if (/HTTP 400/.test(message)) {
+      return "参数错误：没有读到有效 JD，请刷新页面或点开岗位详情后重试。";
+    }
+    if (/HTTP 500/.test(message)) {
+      return "后端匹配失败：请查看 server.py 终端报错，常见原因是 API key、代理或 LLM 超时。";
+    }
+    if (/HTTP \d+/.test(message)) {
+      return `后端返回异常：${message}。请查看 server.py 终端报错。`;
+    }
+    return `请求失败：${message || "未知错误"}。请确认后端服务和网络代理正常。`;
   }
 
   function fetchWithTimeout(url, options = {}) {
