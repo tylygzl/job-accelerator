@@ -4,9 +4,8 @@ from dotenv import load_dotenv
 load_dotenv()
 os.environ["LANGSMITH_TRACING"] = "false"
 
-from langchain_openai import ChatOpenAI
 from shixiseng_search import search, close as close_browser
-from pipeline import filter_and_match, generate_interview_prep
+from pipeline import filter_and_match, generate_interview_prep, make_chat_model
 
 # ── 用户配置（将来从 Streamlit 侧边栏读取） ──
 CONFIG = {
@@ -30,11 +29,7 @@ SKILLS = [
 ]
 
 # ── 初始化 ──
-llm = ChatOpenAI(
-    model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
-    api_key=os.getenv("DEEPSEEK_API_KEY"),
-    base_url="https://api.deepseek.com"
-)
+llm = make_chat_model(temperature=0)
 
 # ── 流水线 ──
 print(f"\n🔍 搜索：{CONFIG['keyword']} @ {CONFIG['city']}")

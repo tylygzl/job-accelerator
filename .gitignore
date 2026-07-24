@@ -5,4 +5,8 @@ shixiseng_profile/
 .venv/
 __pycache__/
 *.pyc
+*.log
+codex-review.jsonl
+server.out.log
+server.err.log
 .DS_Store

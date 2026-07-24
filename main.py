@@ -2,21 +2,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import os
+from uuid import uuid4
 os.environ["LANGSMITH_TRACING"] = "false"
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
 from deepagents import create_deep_agent
 from deepagents import FilesystemPermission
-from langchain_openai import ChatOpenAI
+from pipeline import make_chat_model
 
 # --- 模型 ---
-model = ChatOpenAI(
-    model=os.environ["MODEL_NAME"],
-    api_key=os.environ["DEEPSEEK_API_KEY"],
-    base_url="https://api.deepseek.com/v1",
-    temperature=0,
-    timeout=60,
-)
+model = make_chat_model(temperature=0, timeout=60, required=True)
 
 # --- 三个子 Agent ---
 
@@ -117,7 +112,7 @@ resume_text = SAMPLE_RESUME.strip()
 
 result = agent.invoke(
     {"messages": [{"role": "user", "content": f"请拆解以下岗位描述：\n\n{jd_text}\n\n拆解完成后，用这份简历做人岗匹配：\n\n{resume_text}"}]},
-    config={"configurable": {"thread_id": "1"}},
+    config={"configurable": {"thread_id": str(uuid4())}},
 )
 
 for msg in result["messages"]:

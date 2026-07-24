@@ -503,6 +503,47 @@ def _llm_min_score() -> int:
     return _env_int(75, "JOB_ACCELERATOR_LLM_MIN_SCORE", "LLM_MIN_SCORE")
 
 
+def make_chat_model(
+    *,
+    temperature: float = 0,
+    timeout: float | None = None,
+    json_mode: bool = False,
+    required: bool = False,
+) -> Any | None:
+    """Create a provider-agnostic ChatOpenAI model from LLM_* config."""
+    _load_local_dotenv()
+
+    provider = _llm_provider()
+    if provider in LLM_LOCAL_PROVIDERS:
+        if required:
+            raise ValueError("未配置可用 LLM。请在 .env 中设置 LLM_PROVIDER、LLM_API_KEY 和 LLM_MODEL。")
+        print("[llm] provider=none; using local fallback")
+        return None
+
+    api_key = _llm_api_key(provider)
+    model_name = _llm_model(provider)
+    base_url = _llm_base_url(provider)
+    print(
+        f"[llm] provider={provider} model={model_name} "
+        f"base_url={base_url or '<provider-default>'} api_key={_masked_secret(api_key)}"
+    )
+    if not api_key:
+        if required:
+            raise ValueError(f"未配置 {provider} API Key。请设置 LLM_API_KEY 或对应供应商的 API Key。")
+        return None
+
+    proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or ""
+    model = ChatOpenAI(
+        model=model_name,
+        api_key=api_key,
+        base_url=base_url,
+        temperature=temperature,
+        timeout=timeout if timeout is not None else float(os.getenv("JOB_ACCELERATOR_LLM_TIMEOUT", "45")),
+        openai_proxy=proxy if proxy else None,
+    )
+    return _bind_json_mode(model) if json_mode else model
+
+
 def _make_llm() -> Any | None:
     global _LLM_CACHE_READY, _LLM_CACHE
     if _LLM_CACHE_READY:
@@ -512,38 +553,7 @@ def _make_llm() -> Any | None:
         if _LLM_CACHE_READY:
             return _LLM_CACHE
 
-        _load_local_dotenv()
-
-        provider = _llm_provider()
-        if provider in LLM_LOCAL_PROVIDERS:
-            print("[llm] provider=none; using local fallback")
-            _LLM_CACHE = None
-            _LLM_CACHE_READY = True
-            return None
-
-        api_key = _llm_api_key(provider)
-        model_name = _llm_model(provider)
-        base_url = _llm_base_url(provider)
-        print(
-            f"[llm] provider={provider} model={model_name} "
-            f"base_url={base_url or '<provider-default>'} api_key={_masked_secret(api_key)}"
-        )
-        if not api_key:
-            _LLM_CACHE = None
-            _LLM_CACHE_READY = True
-            return None
-
-        proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or ""
-
-        model = ChatOpenAI(
-            model=model_name,
-            api_key=api_key,
-            base_url=base_url,
-            temperature=0,
-            timeout=float(os.getenv("JOB_ACCELERATOR_LLM_TIMEOUT", "45")),
-            openai_proxy=proxy if proxy else None,
-        )
-        _LLM_CACHE = _bind_json_mode(model)
+        _LLM_CACHE = make_chat_model(json_mode=True)
         _LLM_CACHE_READY = True
         return _LLM_CACHE
 
