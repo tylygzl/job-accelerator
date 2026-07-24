@@ -118,7 +118,11 @@ SKILL_MATCHER_PROMPT = """你是“技能匹配员”。你会收到 JD 拆解�
 - risk_level 只能是“低”“中”“高”：75分及以上低，50-74中，50以下高。
 - matched_skills 必须引用候选人 skills.json 中的 level/evidence/project。
 - missing_skills 不要扩大缺口，只列 JD 关心但候选人证据不足的点。
-- opening_message 用 opening_target 开头，结合 JD 具体要求和候选人证据写 80-140 字，必须包含 GitHub: tylygzl；不要写“我热爱”“学习能力强”“快速学习”“感兴趣”“期待交流”“希望给机会”等空话；50 分以下不要说高度匹配。"""
+- opening_message 必须用 opening_target 开头，第一句要点名 JD 里的一个具体要求或工作内容，不要只写“岗位匹配”。
+- opening_message 结构：公司/岗位切入 + JD具体要求 + 简历证据 + GitHub: tylygzl，80-140 字。
+- 候选人证据必须来自 skills_profile 的 evidence/project，不要编造项目、指标或经历。
+- 不要写“我热爱”“学习能力强”“快速学习”“感兴趣”“期待交流”“希望给机会”“我重点匹配”等空话或模板句。
+- 50 分以下不要说高度匹配，只能写“有部分交集/建议先确认核心要求”。"""
 
 
 RESUME_SKILL_EXTRACTOR_PROMPT = """从以下简历提取技能列表，格式跟 skills.json 一样：must_have数组+familiar数组+projects数组，每项含skill/level/evidence。
@@ -1114,6 +1118,73 @@ def _compact_evidence(text: str, limit: int = 72) -> str:
     return clean[:limit].rstrip(" ，。；;") + "..."
 
 
+def _opening_role(report: dict[str, Any], jd_text: str = "") -> str:
+    for line in jd_text.splitlines():
+        clean = line.strip()
+        if clean.startswith("岗位：") or clean.startswith("岗位:"):
+            role = clean.split("：", 1)[-1].split(":", 1)[-1].strip()
+            if role:
+                return role
+
+    role = str(report.get("role") or "").strip()
+    return role if role and role != "未知岗位" else "岗位"
+
+
+def _opening_subject(report: dict[str, Any], jd_text: str = "") -> str:
+    target = _opening_target(report, jd_text)
+    role = _opening_role(report, jd_text)
+    if target and target != "这个岗位":
+        if role and role not in target:
+            suffix = role if role.endswith(("岗位", "职位")) else f"{role}岗位"
+            return f"{target}的{suffix}"
+        return f"{target}的这个岗位"
+    if role and role != "岗位":
+        return role if role.endswith(("岗位", "职位")) else f"{role}岗位"
+    return "这个岗位"
+
+
+def _clean_jd_hook_line(line: str) -> str:
+    clean = re.sub(r"\s+", " ", line or "").strip(" \t-#*，。；;")
+    clean = re.sub(r"^(岗位详情|职位描述|岗位职责|工作职责|任职要求|岗位要求|任职资格|工作内容)[:：]?", "", clean).strip()
+    clean = re.sub(r"^(岗位|公司|薪资|地点)[:：].*$", "", clean).strip()
+    if len(clean) > 54:
+        for separator in ["。", "；", ";"]:
+            first = clean.split(separator, 1)[0].strip(" ，,。；;")
+            if 12 <= len(first) < len(clean):
+                clean = first
+                break
+    if len(clean) > 54:
+        first = re.split(r"[，,]", clean, 1)[0].strip(" ，,。；;")
+        if len(first) >= 12:
+            clean = first
+    if len(clean) > 54:
+        clean = clean[:54].rstrip(" ，。；;") + "..."
+    return clean
+
+
+def _opening_jd_hook(jd_text: str, skills: list[str]) -> str:
+    lines = [_clean_jd_hook_line(line) for line in _opening_jd_excerpt(jd_text, 900).splitlines()]
+    lines = [line for line in lines if len(line) >= 8]
+    for skill in skills:
+        for line in lines:
+            if _skill_matches_text(skill, line):
+                return line
+
+    for line in lines:
+        if _contains_any(line, ["负责", "熟悉", "掌握", "具备", "开发", "搭建", "Agent", "RAG", "大模型", "LLM", "Python"]):
+            return line
+    return ""
+
+
+def _opening_hook_clause(jd_text: str, skills: list[str]) -> str:
+    hook = _opening_jd_hook(jd_text, skills)
+    if hook:
+        return f"JD 里强调{hook}"
+    if skills:
+        return f"核心要求集中在{'、'.join(skills[:2])}"
+    return "岗位要求需要进一步确认"
+
+
 def _opening_target(report: dict[str, Any], jd_text: str = "") -> str:
     for line in jd_text.splitlines():
         clean = line.strip()
@@ -1143,14 +1214,8 @@ def _opening_jd_excerpt(jd_text: str, limit: int = 700) -> str:
 
 
 def _rule_opening(report: dict[str, Any], skills_profile: dict[str, Any], jd_text: str = "") -> str:
-    target = _opening_target(report, jd_text)
+    subject = _opening_subject(report, jd_text)
     score = _coerce_score(report.get("match_score", 0))
-    if score >= 75:
-        prefix = f"{target}的这个岗位跟我的技能高度匹配。"
-    elif score >= 50:
-        prefix = f"{target}的这个岗位与我的项目经历有部分匹配。"
-    else:
-        prefix = f"{target}的这个岗位与我的当前经历重合度有限。"
     matched = report.get("matched_skills", []) or []
     picks: list[tuple[int, int, str, str]] = []
     for index, item in enumerate(matched):
@@ -1164,12 +1229,14 @@ def _rule_opening(report: dict[str, Any], skills_profile: dict[str, Any], jd_tex
 
     picks.sort(key=lambda item: (item[0], item[1]))
     selected = picks[:2]
+    selected_skills = [skill for _, _, skill, _ in selected]
+    hook_clause = _opening_hook_clause(jd_text, selected_skills)
     if not selected:
         if score < 50:
-            return f"{prefix}我可以围绕求职加速器项目说明多 Agent、FastAPI 和浏览器插件的工程实践，但建议先确认岗位核心要求。相关代码和项目记录在 GitHub: tylygzl。"
-        return f"{prefix}我独立搭建了可复盘的项目，能直接说明实现细节、指标和部署过程。相关代码和项目记录在 GitHub: tylygzl。"
+            return f"{subject}，{hook_clause}，但和我的当前经历重合有限。我可以补充求职加速器里多 Agent、FastAPI 和浏览器插件的工程实践；GitHub: tylygzl。"
+        return f"{subject}，{hook_clause}，和我做过的求职加速器项目有交集。我可以说明实现、指标和部署；GitHub: tylygzl。"
 
-    skills_text = "、".join(skill for _, _, skill, _ in selected)
+    skills_text = "、".join(selected_skills)
     evidence_parts: list[str] = []
     seen_evidence: set[str] = set()
     for _, _, _skill, evidence in selected:
@@ -1180,8 +1247,10 @@ def _rule_opening(report: dict[str, Any], skills_profile: dict[str, Any], jd_tex
             evidence_parts.append(compact)
     evidence_text = "；".join(evidence_parts) or "已有项目中可复盘实现、指标和部署细节"
     if score < 50:
-        return f"{prefix}可沟通的交集主要是{skills_text}，证据是：{evidence_text}。相关代码和项目记录在 GitHub: tylygzl，我可以展开讲实现细节、指标和部署过程。"
-    return f"{prefix}我独立搭建了{skills_text}相关项目，证据是：{evidence_text}。相关代码和项目记录在 GitHub: tylygzl，我可以展开讲实现细节、指标和部署过程。"
+        return f"{subject}，{hook_clause}，但和我的当前经历重合有限。可沟通的交集是{skills_text}；证据是：{evidence_text}。GitHub: tylygzl。"
+    if score < 75:
+        return f"{subject}，{hook_clause}，其中{skills_text}能和我的项目对上。证据是：{evidence_text}。GitHub: tylygzl，可展开实现细节。"
+    return f"{subject}，{hook_clause}，和我做过的{skills_text}项目衔接很直接。证据是：{evidence_text}。GitHub: tylygzl，可展开实现和部署。"
 
 
 def _sanitize_opening_message(message: Any, target: str, fallback: str, score: int) -> str:
@@ -1189,7 +1258,7 @@ def _sanitize_opening_message(message: Any, target: str, fallback: str, score: i
     if len(clean) < 20:
         return fallback
 
-    empty_words = ["我热爱", "学习能力强", "希望给机会", "希望贵公司给机会", "快速学习"]
+    empty_words = ["我热爱", "学习能力强", "希望给机会", "希望贵公司给机会", "快速学习", "我重点匹配"]
     if any(empty_word in clean for empty_word in empty_words):
         return fallback
     clean = re.sub(r"招聘团队[，,。:：]*", "", clean).strip()
@@ -1201,6 +1270,13 @@ def _sanitize_opening_message(message: Any, target: str, fallback: str, score: i
     clean = re.sub(r"GitHub[（(]\s*tylygzl\s*[）)]", "GitHub: tylygzl", clean, flags=re.I)
     clean = re.sub(r"GitHub[:：]?\s*tylygzl", "GitHub: tylygzl", clean, flags=re.I)
     clean = re.sub(r"(虽然|但是|同时|另外|此外)[。；;!！]*$", "", clean).strip()
+    generic_patterns = [
+        r"^(这个|该)?岗位(和|跟)我的技能(高度|非常)?匹配",
+        r"^我会围绕(这个|该)?岗位要求说明已有项目证据",
+        r"的这个岗位(和|跟)我的技能(高度|非常)?匹配",
+    ]
+    if any(re.search(pattern, clean) for pattern in generic_patterns):
+        return fallback
 
     if score < 50:
         clean = clean.replace("高度匹配", "有部分工程交集").replace("非常匹配", "有部分交集")
@@ -1208,10 +1284,7 @@ def _sanitize_opening_message(message: Any, target: str, fallback: str, score: i
     if "GitHub: tylygzl" not in clean:
         clean = clean.rstrip(" ，。；;") + "。GitHub: tylygzl。"
 
-    if target and target != "这个岗位":
-        if clean.startswith(target):
-            clean = clean[len(target) :].lstrip(" ，,。:：")
-            clean = re.sub(r"^(的)?这个岗位[，,。:：]*", "", clean).strip()
+    if target and target != "这个岗位" and not clean.startswith(target):
         clean = f"{target}的这个岗位，{clean}"
 
     clean = re.sub(r"\s+", " ", clean).strip()
