@@ -328,7 +328,12 @@ def llm_config_summary() -> dict[str, Any]:
         "api_key_configured": bool(api_key),
         "proxy_configured": bool(os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")),
         "local_fallback": local_mode or not bool(api_key),
+        "llm_jd_decomposer": _use_llm_jd_decomposer(),
     }
+
+
+def _use_llm_jd_decomposer() -> bool:
+    return _env_value("JOB_ACCELERATOR_LLM_JD_DECOMPOSER", "LLM_JD_DECOMPOSER").lower() in {"1", "true", "yes", "on"}
 
 
 def _make_llm() -> Any | None:
@@ -1054,12 +1059,12 @@ def _apply_score_guardrails(report: dict[str, Any], jd_text: str, skills_profile
     return guarded
 
 
-def build_match_graph(llm: Any | None = None) -> Any:
+def build_match_graph(llm: Any | None = None, use_llm_jd_decomposer: bool = False) -> Any:
     llm = _bind_json_mode(llm)
 
     def jd_decomposer_agent(state: MatchState) -> dict[str, Any]:
         jd_text = state["jd_text"]
-        if llm is not None:
+        if llm is not None and use_llm_jd_decomposer:
             try:
                 data = _invoke_json(
                     llm,
@@ -1414,7 +1419,7 @@ def match_jd(
                 profile = resume_profile
         except Exception:
             pass
-    graph = build_match_graph(active_llm)
+    graph = build_match_graph(active_llm, use_llm_jd_decomposer=_use_llm_jd_decomposer())
     state = graph.invoke({"jd_text": jd_text, "skills_profile": profile})
     report = _model_dump(_model_validate(MatchReport, state["report"]))  # type: ignore[arg-type]
     report = _apply_score_guardrails(report, jd_text, profile)

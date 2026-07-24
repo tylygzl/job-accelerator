@@ -1516,6 +1516,9 @@
     if (/HTTP 500/.test(message)) {
       return "后端匹配失败：请查看 server.py 终端报错，常见原因是 API key、代理或 LLM 超时。";
     }
+    if (/HTTP 429/.test(message)) {
+      return "后端正在分析上一条岗位，这条会在下次刷新或继续扫描时重试。";
+    }
     if (/HTTP \d+/.test(message)) {
       return `后端返回异常：${message}。请查看 server.py 终端报错。`;
     }
@@ -1526,7 +1529,7 @@
     const message = String(error?.message || error || "");
     return Boolean(
       error?.name === "AbortError" ||
-      /Failed to fetch|NetworkError|Load failed|fetch|HTTP 500|HTTP 502|HTTP 503|HTTP 504/i.test(message),
+      /Failed to fetch|NetworkError|Load failed|fetch|HTTP 429|HTTP 500|HTTP 502|HTTP 503|HTTP 504/i.test(message),
     );
   }
 

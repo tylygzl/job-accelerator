@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -23,6 +24,7 @@ class MatchRequest(BaseModel):
 
 
 app = FastAPI(title="求职加速器", version="2.0.0")
+_MATCH_LOCK = threading.Lock()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -46,12 +48,16 @@ def match(request: MatchRequest) -> dict:
     jd_text = request.jd_text.strip()
     if not jd_text:
         raise HTTPException(status_code=400, detail="jd_text 不能为空")
+    if not _MATCH_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=429, detail="后端正在分析上一条岗位，请稍后重试")
     try:
         return match_jd(jd_text, resume_text=request.resume_text or "")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"匹配失败：{exc}") from exc
+    finally:
+        _MATCH_LOCK.release()
 
 
 if __name__ == "__main__":
