@@ -9,7 +9,6 @@
   const PENDING_CHAT_KEY = "job_accelerator_pending_chat";
   const CHAT_HELPER_ID = "job-accelerator-chat-helper";
   const AUTO_OPEN_KEY = "job_accelerator_auto";
-  const AUTO_CONTINUE_KEY = "job_accelerator_auto_continue";
   const MATCH_CACHE_LIMIT = 500;
   const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
   const AUTO_OPEN_TTL_MS = 2 * 60 * 1000;
@@ -54,7 +53,6 @@
   let scanSummary = emptyScanSummary();
   let analyzing = false;
   let scanningMore = false;
-  let autoContinueAfterShow = false;
 
   hydrateStatuses().catch(() => {});
   autoFillPendingChat().catch(() => {});
@@ -83,27 +81,7 @@
     visible = true;
     bindShell();
 
-    const cfg = await storageGet(["exclude_keywords", "resume_text", "min_score", "daily_goal"]);
-    activeMinScore = normalizeMinScore(cfg.min_score);
-    activeDailyGoal = normalizeDailyGoal(cfg.daily_goal);
-    const jobs = extractJobs(parseExcludeKeywords(cfg.exclude_keywords));
-    const newJobs = mergeSessionJobs(jobs);
-    scanSummary = await buildScanSummary(String(cfg.resume_text || "") ? simpleHash(String(cfg.resume_text || "")) : "", jobs.length, newJobs.length);
-    renderScanSummary();
-    const results = panel.querySelector("#job-accelerator-results");
-    if (results) {
-      results.innerHTML = sessionJobs.size ? '<div class="loading">正在分析当前可见岗位...</div>' : '<div class="empty">未检测到岗位</div>';
-    }
-    refreshStats(sessionJobList());
-    const shouldContinue = autoContinueAfterShow;
-    autoContinueAfterShow = false;
-    if (newJobs.length) {
-      const work = analyze(newJobs);
-      if (shouldContinue) work.then(() => continueScan()).catch(() => {});
-    } else {
-      render(sessionJobList());
-      if (shouldContinue) continueScan().catch(() => {});
-    }
+    await refreshVisibleJobs("正在分析当前可见岗位...");
   }
 
   function hide() {
@@ -142,30 +120,8 @@
     }
   }
 
-  function rememberAutoContinueScan() {
-    try {
-      sessionStorage.setItem(AUTO_CONTINUE_KEY, JSON.stringify({ expiresAt: Date.now() + AUTO_OPEN_TTL_MS }));
-    } catch (_) {
-      sessionStorage.setItem(AUTO_CONTINUE_KEY, "1");
-    }
-  }
-
-  function consumeAutoContinueScan() {
-    const raw = sessionStorage.getItem(AUTO_CONTINUE_KEY);
-    if (!raw) return false;
-    sessionStorage.removeItem(AUTO_CONTINUE_KEY);
-    if (raw === "1") return true;
-    try {
-      const data = JSON.parse(raw);
-      return Number(data?.expiresAt || 0) > Date.now();
-    } catch (_) {
-      return false;
-    }
-  }
-
-  function scheduleAutoShow(continueAfterShow = false) {
+  function scheduleAutoShow() {
     if (visible || panel) return;
-    autoContinueAfterShow = autoContinueAfterShow || continueAfterShow;
     const wait = setInterval(() => {
       if (document.querySelectorAll(JOB_CARD_SELECTOR).length > 0) {
         clearInterval(wait);
@@ -176,7 +132,7 @@
   }
 
   if (isBossSearchPage() && consumeAutoOpenPanel()) {
-    scheduleAutoShow(consumeAutoContinueScan());
+    scheduleAutoShow();
   }
 
   function emptyScanSummary() {
@@ -330,6 +286,34 @@
     const visible = scanSummary.visible || document.querySelectorAll(JOB_CARD_SELECTOR).length;
     const textValue = `当前可见 ${visible} 个 | 本次累计 ${scanSummary.total} 个 | 新增 ${scanSummary.added} 个 | 缓存 ${scanSummary.cached} | 待请求 ${scanSummary.fresh} | 目标 ${scanSummary.target}`;
     node.textContent = `${prefix ? `${prefix} ` : ""}${textValue}`;
+  }
+
+  async function refreshVisibleJobs(prefix = "扫描当前可见岗位。") {
+    const cfg = await storageGet(["exclude_keywords", "resume_text", "min_score", "daily_goal"]);
+    activeMinScore = normalizeMinScore(cfg.min_score);
+    activeDailyGoal = normalizeDailyGoal(cfg.daily_goal);
+    const resumeKey = String(cfg.resume_text || "") ? simpleHash(String(cfg.resume_text || "")) : "";
+    const jobs = extractJobs(parseExcludeKeywords(cfg.exclude_keywords));
+    const newJobs = mergeSessionJobs(jobs);
+    const unfinishedJobs = jobs
+      .map((job) => sessionJobs.get(cacheKeyFor(job)) || job)
+      .filter((job) => !job.match && !job.error);
+    const jobsToAnalyze = uniqueJobs([...newJobs, ...unfinishedJobs]);
+    scanSummary = await buildScanSummary(resumeKey, jobs.length, newJobs.length);
+    renderScanSummary(prefix);
+
+    const results = panel?.querySelector("#job-accelerator-results");
+    if (results && !sessionJobs.size) {
+      results.innerHTML = '<div class="empty">未检测到岗位</div>';
+    }
+    refreshStats(sessionJobList());
+
+    if (jobsToAnalyze.length) {
+      await analyze(jobsToAnalyze);
+      return jobsToAnalyze.length;
+    }
+    render(sessionJobList());
+    return 0;
   }
 
   function extractJobs(excludeKeywords = []) {
@@ -787,13 +771,14 @@
       activeDailyGoal = normalizeDailyGoal(cfg.daily_goal);
       const resumeKey = String(cfg.resume_text || "") ? simpleHash(String(cfg.resume_text || "")) : "";
       const excludeKeywords = parseExcludeKeywords(cfg.exclude_keywords);
-      const beforeJobs = extractJobs(excludeKeywords);
-      const beforeNew = mergeSessionJobs(beforeJobs);
+      const currentWork = await refreshVisibleJobs("先检查当前补位新增。");
+      if (currentWork > 0) {
+        scanSummary = await buildScanSummary(resumeKey, scanSummary.visible, 0);
+        renderScanSummary("当前可见新增已处理，再点继续扫描下滑。");
+        return;
+      }
 
       if (isBossSearchPage()) {
-        scanSummary = await buildScanSummary(resumeKey, beforeJobs.length, beforeNew.length);
-        renderScanSummary(beforeNew.length ? "先分析当前补位新增。" : "当前可见岗位已记录。");
-        if (beforeNew.length) await analyze(beforeNew);
         await scrollJobListOneScreen();
       }
 
@@ -908,7 +893,6 @@
 
     await storageSet({ [PENDING_CHAT_KEY]: makePendingChat(job) });
     rememberAutoOpenPanel();
-    rememberAutoContinueScan();
     clickElement(chatButton);
     showCardInfo(card, "请在 BOSS 弹窗中手动确认，进入聊天页后会自动填入开场白。");
     const opened = await waitForChatPageAndFill();
@@ -1008,11 +992,10 @@
       if (isBossChatPage()) {
         autoFillPendingChat().catch(() => {});
       } else if (isBossSearchPage() && consumeAutoOpenPanel()) {
-        const shouldContinue = consumeAutoContinueScan();
-        if (panel && visible && shouldContinue) {
-          continueScan().catch(() => {});
+        if (panel && visible) {
+          refreshVisibleJobs("已返回，扫描当前补位新增。").catch(() => {});
         } else {
-          scheduleAutoShow(shouldContinue);
+          scheduleAutoShow();
         }
       }
     }, 500);
@@ -1046,7 +1029,6 @@
 
   function returnToSearchPage(pending) {
     rememberAutoOpenPanel();
-    rememberAutoContinueScan();
     const target = String(pending?.searchUrl || "");
     if (target) {
       location.href = target;
