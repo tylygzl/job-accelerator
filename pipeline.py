@@ -127,6 +127,18 @@ SKILL_MATCHER_PROMPT = """你是“技能匹配员”。你会收到 JD 拆解�
 - 50 分以下不要说高度匹配，只能写“有部分交集/建议先确认核心要求”。"""
 
 
+OPENING_MESSAGE_PROMPT = """你是求职沟通开场白改写助手。
+只输出 JSON object，不要 Markdown，不要解释：
+{"opening_message": "发给 HR 的一句开场白"}
+
+规则：
+- 80-140 字，第一句必须以公司名或岗位名切入。
+- 必须写成“我看岗位里提到 X，这和我做过的 Y 比较契合”的逻辑，其中 X 来自 JD，Y 来自候选人证据。
+- 只使用输入里的 JD 要求和候选人证据，不要编造公司、项目、指标、链接。
+- 如果 JD 要求和候选人证据挂不上钩，写“这块我只有部分交集”，不要强行说匹配。
+- 不要写“JD强调”“证据是”“高度匹配”“我热爱”“学习能力强”“希望给机会”“期待交流”等模板话。"""
+
+
 RESUME_SKILL_EXTRACTOR_PROMPT = """从以下简历提取技能列表，格式跟 skills.json 一样：must_have数组+familiar数组+projects数组，每项含skill/level/evidence。
 
 只输出 JSON object，不要 Markdown，不要解释。字段必须严格符合：
@@ -272,6 +284,8 @@ def _llm_provider() -> str:
     provider = os.getenv("LLM_PROVIDER")
     if provider is not None:
         return provider.strip().lower() or "none"
+    if _env_value("ARK_API_KEY", "VOLCENGINE_API_KEY"):
+        return "volcengine"
     if _env_value("LLM_API_KEY", "OPENAI_API_KEY"):
         return "openai-compatible"
     if _env_value("DEEPSEEK_API_KEY"):
@@ -285,26 +299,32 @@ def _llm_base_url(provider: str) -> str | None:
         return base_url
     if provider == "deepseek":
         return _env_value("DEEPSEEK_BASE_URL") or "https://api.deepseek.com/v1"
+    if provider in {"volcengine", "doubao", "ark"}:
+        return _env_value("ARK_BASE_URL", "VOLCENGINE_BASE_URL") or "https://ark.cn-beijing.volces.com/api/v3"
     if provider in {"openai", "openai-official"}:
         return None
     return _env_value("DEEPSEEK_BASE_URL") or None
 
 
 def _llm_model(provider: str) -> str:
-    model = _env_value("LLM_MODEL", "DEEPSEEK_MODEL", "MODEL_NAME")
+    model = _env_value("LLM_MODEL", "ARK_MODEL", "VOLCENGINE_MODEL", "DEEPSEEK_MODEL", "MODEL_NAME")
     if model:
         return model
     if provider == "deepseek":
         return "deepseek-v4-flash"
+    if provider in {"volcengine", "doubao", "ark"}:
+        return "doubao-pro-32k-240615"
     return "gpt-4o-mini"
 
 
 def _llm_api_key(provider: str) -> str:
     if provider == "deepseek":
         return _env_value("LLM_API_KEY", "DEEPSEEK_API_KEY")
+    if provider in {"volcengine", "doubao", "ark"}:
+        return _env_value("LLM_API_KEY", "ARK_API_KEY", "VOLCENGINE_API_KEY")
     if provider in {"openai", "openai-official"}:
         return _env_value("LLM_API_KEY", "OPENAI_API_KEY")
-    return _env_value("LLM_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY")
+    return _env_value("LLM_API_KEY", "ARK_API_KEY", "VOLCENGINE_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY")
 
 
 def _load_local_dotenv() -> None:
@@ -329,11 +349,47 @@ def llm_config_summary() -> dict[str, Any]:
         "proxy_configured": bool(os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")),
         "local_fallback": local_mode or not bool(api_key),
         "llm_jd_decomposer": _use_llm_jd_decomposer(),
+        "two_stage": True,
+        "llm_min_score": _llm_min_score(),
+        "llm_resume_extractor": _use_llm_resume_extractor(),
+        "llm_matcher": _use_llm_matcher(),
+        "llm_opening": _use_llm_opening(),
     }
+
+
+def _env_int(default: int, *names: str) -> int:
+    for name in names:
+        value = os.getenv(name)
+        if not value:
+            continue
+        try:
+            return max(0, min(100, int(value.strip())))
+        except ValueError:
+            continue
+    return default
 
 
 def _use_llm_jd_decomposer() -> bool:
     return _env_value("JOB_ACCELERATOR_LLM_JD_DECOMPOSER", "LLM_JD_DECOMPOSER").lower() in {"1", "true", "yes", "on"}
+
+
+def _use_llm_matcher() -> bool:
+    return _env_value("JOB_ACCELERATOR_LLM_MATCHER", "LLM_MATCHER").lower() in {"1", "true", "yes", "on"}
+
+
+def _use_llm_resume_extractor() -> bool:
+    return _env_value("JOB_ACCELERATOR_LLM_RESUME_EXTRACTOR", "LLM_RESUME_EXTRACTOR").lower() in {"1", "true", "yes", "on"}
+
+
+def _use_llm_opening() -> bool:
+    value = _env_value("JOB_ACCELERATOR_LLM_OPENING", "LLM_OPENING").lower()
+    if not value:
+        return True
+    return value in {"1", "true", "yes", "on"}
+
+
+def _llm_min_score() -> int:
+    return _env_int(75, "JOB_ACCELERATOR_LLM_MIN_SCORE", "LLM_MIN_SCORE")
 
 
 def _make_llm() -> Any | None:
@@ -704,12 +760,13 @@ def _extract_resume_skills_profile(resume_text: str, llm: Any | None) -> dict[st
     return profile if matched_items else None
 
 
-def _resume_cache_key(resume_text: str) -> str:
-    return hashlib.sha256(resume_text.encode("utf-8")).hexdigest()
+def _resume_cache_key(resume_text: str, llm: Any | None) -> str:
+    mode = "llm" if llm is not None else "local"
+    return hashlib.sha256(f"{mode}\n{resume_text}".encode("utf-8")).hexdigest()
 
 
 def _get_resume_skills_profile(resume_text: str, llm: Any | None) -> dict[str, Any] | None:
-    key = _resume_cache_key(resume_text)
+    key = _resume_cache_key(resume_text, llm)
     with _RESUME_PROFILE_LOCK:
         if key not in _RESUME_PROFILE_CACHE:
             _RESUME_PROFILE_CACHE[key] = _extract_resume_skills_profile(resume_text, llm)
@@ -1332,6 +1389,63 @@ def _rule_opening(report: dict[str, Any], skills_profile: dict[str, Any], jd_tex
     return f"{subject}，{hook_clause}，这和我做过的{skills_text}项目比较契合：{evidence_text}。{_opening_tail(skills_profile, '我可以直接讲实现取舍和部署过程')}"
 
 
+def _local_match_report(jd_text: str, skills_profile: dict[str, Any]) -> dict[str, Any]:
+    jd_analysis = _fallback_jd_analysis(jd_text)
+    report = _model_dump(_fallback_report(jd_analysis, skills_profile))
+    return _apply_score_guardrails(report, jd_text, skills_profile)
+
+
+def _profile_excerpt_for_opening(skills_profile: dict[str, Any], limit: int = 12) -> dict[str, Any]:
+    items: list[dict[str, str]] = []
+    for item in _candidate_skill_items(skills_profile)[:limit]:
+        items.append(
+            {
+                "skill": item["skill"],
+                "level": item["level"],
+                "evidence": _compact_evidence(item["evidence"], 120),
+            }
+        )
+    return {
+        "skills": items,
+        "public_profiles": _string_list(skills_profile.get("public_profiles")) if isinstance(skills_profile, dict) else [],
+        "target_profile": skills_profile.get("target_profile", {}) if isinstance(skills_profile, dict) else {},
+    }
+
+
+def _generate_opening_with_llm(
+    report: dict[str, Any],
+    skills_profile: dict[str, Any],
+    jd_text: str,
+    llm: Any | None,
+) -> str:
+    if llm is None or not _use_llm_opening():
+        return ""
+    fallback = _rule_opening(report, skills_profile, jd_text)
+    target = _opening_target(report, jd_text)
+    score = _coerce_score(report.get("match_score", 0))
+    try:
+        data = _invoke_json(
+            llm,
+            OPENING_MESSAGE_PROMPT,
+            json.dumps(
+                {
+                    "opening_target": target,
+                    "match_score": score,
+                    "risk_level": report.get("risk_level", ""),
+                    "matched_skills": report.get("matched_skills", [])[:5],
+                    "missing_skills": report.get("missing_skills", [])[:5],
+                    "jd_excerpt": _opening_jd_excerpt(jd_text, 900),
+                    "candidate_profile": _profile_excerpt_for_opening(skills_profile),
+                },
+                ensure_ascii=False,
+            ),
+        )
+        return _sanitize_opening_message(data.get("opening_message", ""), target, fallback, score, skills_profile)
+    except Exception as exc:
+        print(f"[opening] llm failed: {exc}")
+        return ""
+
+
 def _remove_unverified_public_proof(message: str) -> str:
     clean = re.sub(r"(?:相关代码和项目记录在\s*)?GitHub[:：]\s*[A-Za-z0-9][A-Za-z0-9-]{1,38}[，,。；;]*", "", message, flags=re.I)
     clean = re.sub(r"https?://(?:www\.)?github\.com/[^\s\"'，。；;()（）<>]+[，,。；;]*", "", clean, flags=re.I)
@@ -1414,16 +1528,32 @@ def match_jd(
     resume_text = (resume_text or "").strip()
     if resume_text:
         try:
-            resume_profile = _get_resume_skills_profile(resume_text, active_llm)
+            resume_llm = active_llm if _use_llm_resume_extractor() else None
+            resume_profile = _get_resume_skills_profile(resume_text, resume_llm)
             if resume_profile:
                 profile = resume_profile
         except Exception:
             pass
-    graph = build_match_graph(active_llm, use_llm_jd_decomposer=_use_llm_jd_decomposer())
-    state = graph.invoke({"jd_text": jd_text, "skills_profile": profile})
-    report = _model_dump(_model_validate(MatchReport, state["report"]))  # type: ignore[arg-type]
-    report = _apply_score_guardrails(report, jd_text, profile)
-    report["opening_message"] = generate_opening(report, profile, jd_text)
+
+    report = _local_match_report(jd_text, profile)
+    local_score = _coerce_score(report.get("match_score", 0))
+    should_call_llm = active_llm is not None and local_score >= _llm_min_score()
+
+    if should_call_llm and _use_llm_matcher():
+        graph = build_match_graph(active_llm, use_llm_jd_decomposer=_use_llm_jd_decomposer())
+        state = graph.invoke({"jd_text": jd_text, "skills_profile": profile})
+        report = _model_dump(_model_validate(MatchReport, state["report"]))  # type: ignore[arg-type]
+        report = _apply_score_guardrails(report, jd_text, profile)
+
+    if should_call_llm:
+        opening_message = _generate_opening_with_llm(report, profile, jd_text, active_llm)
+        report["opening_message"] = opening_message or generate_opening(report, profile, jd_text)
+    else:
+        if active_llm is not None:
+            suggestions = list(report.get("suggestions") or [])
+            suggestions.insert(0, f"本地快筛低于 {_llm_min_score()} 分，未调用 LLM 生成开场白。")
+            report["suggestions"] = suggestions[:5]
+        report["opening_message"] = generate_opening(report, profile, jd_text)
     return report
 
 
