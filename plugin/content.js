@@ -8,7 +8,9 @@
   const JOB_STATUS_PREFIX = "job_status_";
   const PENDING_CHAT_KEY = "job_accelerator_pending_chat";
   const CHAT_HELPER_ID = "job-accelerator-chat-helper";
+  const AUTO_OPEN_KEY = "job_accelerator_auto";
   const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+  const AUTO_OPEN_TTL_MS = 2 * 60 * 1000;
   const REQUEST_TIMEOUT_MS = 60 * 1000;
   const CHAT_CONFIRM_WAIT_MS = 90 * 1000;
   const DETAIL_SCAN_TIMEOUT_MS = 5 * 1000;
@@ -79,14 +81,34 @@
   }
 
   function go(page) {
-    sessionStorage.setItem("job_accelerator_auto", "1");
+    rememberAutoOpenPanel();
     const url = new URL(location.href);
     url.searchParams.set("page", page);
     location.href = url.toString();
   }
 
-  if (sessionStorage.getItem("job_accelerator_auto") === "1") {
-    sessionStorage.removeItem("job_accelerator_auto");
+  function rememberAutoOpenPanel() {
+    try {
+      sessionStorage.setItem(AUTO_OPEN_KEY, JSON.stringify({ expiresAt: Date.now() + AUTO_OPEN_TTL_MS }));
+    } catch (_) {
+      sessionStorage.setItem(AUTO_OPEN_KEY, "1");
+    }
+  }
+
+  function consumeAutoOpenPanel() {
+    const raw = sessionStorage.getItem(AUTO_OPEN_KEY);
+    if (!raw) return false;
+    sessionStorage.removeItem(AUTO_OPEN_KEY);
+    if (raw === "1") return true;
+    try {
+      const data = JSON.parse(raw);
+      return Number(data?.expiresAt || 0) > Date.now();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  if (consumeAutoOpenPanel()) {
     const wait = setInterval(() => {
       if (document.querySelectorAll(JOB_CARD_SELECTOR).length > 0) {
         clearInterval(wait);
@@ -120,7 +142,16 @@
       const locationText = extractLocation(card);
       const jobUrl = extractJobUrl(card);
       const detailText = extractDomJdText(card);
-      const job = { title, company, salary, location: locationText, tags, url: jobUrl, listIndex };
+      const job = {
+        title,
+        company,
+        salary,
+        location: locationText,
+        tags,
+        url: jobUrl,
+        listIndex,
+        detailSource: detailText ? "card" : "",
+      };
       const jdText = buildJdText(job, detailText);
       if (title && company) jobs.push({ ...job, jd_text: jdText });
     });
@@ -145,6 +176,7 @@
       tags,
       url: location.href,
       listIndex: -1,
+      detailSource: "detail_page",
     };
     return {
       ...job,
@@ -228,7 +260,11 @@
 
       const detailText = await readRightDetailForJob(job);
       scannedInBatch += 1;
-      enriched.push(detailText ? { ...job, jd_text: buildJdText(job, detailText), detailLoaded: true } : job);
+      enriched.push(
+        detailText
+          ? { ...job, jd_text: buildJdText(job, detailText), detailLoaded: true, detailSource: "detail" }
+          : { ...job, detailLoaded: false, detailSource: "summary" },
+      );
       await sleep(DETAIL_SCAN_COOLDOWN_MS);
     }
     return enriched;
@@ -257,9 +293,11 @@
   }
 
   function sourceCardForJob(job) {
+    const cards = Array.from(document.querySelectorAll(JOB_CARD_SELECTOR));
     const index = Number(job.listIndex);
-    if (!Number.isInteger(index) || index < 0) return null;
-    return document.querySelectorAll(JOB_CARD_SELECTOR)[index] || null;
+    const indexed = Number.isInteger(index) && index >= 0 ? cards[index] : null;
+    if (indexed && cardMatchesJob(indexed, job)) return indexed;
+    return cards.find((card) => cardMatchesJob(card, job)) || null;
   }
 
   function selectJobCard(card) {
@@ -281,7 +319,9 @@
       await sleep(DETAIL_SCAN_INTERVAL_MS);
     }
     latest = extractDomJdText(document);
-    return latest.length >= 40 ? latest : "";
+    const detailText = selectedDetailPanelText();
+    const changed = detailSignature(latest) !== beforeSignature;
+    return latest.length >= 40 && (changed || detailMatchesJob(job, detailText)) ? latest : "";
   }
 
   function selectedDetailPanelText() {
@@ -309,9 +349,19 @@
   }
 
   function detailMatchesJob(job, detailText) {
-    const target = compactForMatch(job.title).slice(0, 8);
-    if (!target) return false;
-    return compactForMatch(detailText).includes(target);
+    const detail = compactForMatch(detailText);
+    const title = compactForMatch(job.title).slice(0, 8);
+    const company = compactForMatch(job.company).slice(0, 8);
+    return Boolean((title && detail.includes(title)) || (company && detail.includes(company)));
+  }
+
+  function cardMatchesJob(card, job) {
+    const cardUrl = extractJobUrl(card);
+    if (job.url && cardUrl && cardUrl === job.url) return true;
+    const cardText = compactForMatch(inlineText(card));
+    const title = compactForMatch(job.title).slice(0, 8);
+    const company = compactForMatch(job.company).slice(0, 8);
+    return Boolean(title && company && cardText.includes(title) && cardText.includes(company));
   }
 
   function detailSignature(detailText = extractDomJdText(document)) {
@@ -395,10 +445,11 @@
     const questions = (match.interview_questions || []).slice(0, 3);
     const opening = String(match.opening_message || "").trim();
     const canChat = score >= activeMinScore && opening;
+    const sourceLabel = jdSourceLabel(job);
 
     return `<div class="card ${level}" ${dataAttrs} style="${opacity}">
       <div class="title">${score}% | ${esc(match.role || job.title)}</div>
-      <div class="meta">${esc(job.company)} | ${esc(job.salary)} ${job.cached ? "| 已缓存" : ""}</div>
+      <div class="meta">${esc(job.company)} | ${esc(job.salary)} ${job.cached ? "| 已缓存" : ""} ${sourceLabel ? `| ${sourceLabel}` : ""}</div>
       <div class="risk">风险：${esc(match.risk_level || "待分析")}</div>
       ${matched.length ? `<div>${matched.map((item) => `<span class="badge good">${esc(item.skill)} · ${esc(item.level)}</span>`).join("")}</div>` : ""}
       ${missing.length ? `<div>${missing.map((item) => `<span class="badge warn">${esc(item.skill)}</span>`).join("")}</div>` : ""}
@@ -411,6 +462,14 @@
         <button data-act="save" class="${status === "save" ? "on" : ""}">收藏</button>
       </div>
     </div>`;
+  }
+
+  function jdSourceLabel(job) {
+    if (job.detailSource === "detail_page") return "详情页JD";
+    if (job.detailSource === "detail") return "深读JD";
+    if (job.detailSource === "summary") return "摘要JD";
+    if (job.detailSource === "card") return "卡片JD";
+    return "";
   }
 
   function shellHtml(count) {
@@ -591,6 +650,10 @@
     };
     node.addEventListener("click", preventJavascriptUrl, { capture: true, once: true });
     try {
+      if (typeof node.click === "function") {
+        node.click();
+        return;
+      }
       ["mousedown", "mouseup", "click"].forEach((type) => {
         node.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
       });
@@ -679,7 +742,7 @@
   }
 
   function returnToSearchPage(pending) {
-    sessionStorage.setItem("job_accelerator_auto", "1");
+    rememberAutoOpenPanel();
     const target = String(pending?.searchUrl || "");
     if (target) {
       location.href = target;
@@ -1038,6 +1101,7 @@
         location: job.location || "",
         tags: job.tags || [],
         url: job.url || "",
+        detailSource: job.detailSource || "",
       },
       match,
     };
