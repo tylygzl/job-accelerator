@@ -3,6 +3,7 @@
   "use strict";
 
   const DEFAULT_API = "http://localhost:8000/match";
+  const DEFAULT_DAILY_GOAL = 10;
   const MATCH_CACHE_PREFIX = "job_match_v4_";
   const JOB_STATUS_PREFIX = "job_status_";
   const PENDING_CHAT_KEY = "job_accelerator_pending_chat";
@@ -54,6 +55,8 @@
   async function show() {
     if (panel) return;
     await hydrateStatuses();
+    hideLowMatches = false;
+    latestJobs = [];
     pageNo = parseInt(new URL(location.href).searchParams.get("page") || "1", 10);
     const cfg = await storageGet(["exclude_keywords"]);
     const jobs = extractJobs(parseExcludeKeywords(cfg.exclude_keywords));
@@ -841,7 +844,7 @@
 
   function normalizeDailyGoal(value) {
     const goal = Number.parseInt(value, 10);
-    if (!Number.isFinite(goal)) return 0;
+    if (!Number.isFinite(goal)) return DEFAULT_DAILY_GOAL;
     return Math.max(1, Math.min(100, goal));
   }
 
