@@ -8,13 +8,16 @@ const resumeStatusEl = document.getElementById("resumeStatus");
 const minScoreEl = document.getElementById("minScore");
 const minScoreLabelEl = document.getElementById("minScoreLabel");
 const excludeKeywordsEl = document.getElementById("excludeKeywords");
+const dailyGoalEl = document.getElementById("dailyGoal");
 const DEFAULT_API = "http://localhost:8000/match";
 const DEFAULT_MIN_SCORE = 80;
+const DEFAULT_DAILY_GOAL = 10;
 
 function saveConfig() {
   chrome.storage.local.set({
     apiUrl: apiUrlEl.value || DEFAULT_API,
     exclude_keywords: excludeKeywordsEl.value || "",
+    daily_goal: normalizeDailyGoal(dailyGoalEl.value),
   });
 }
 
@@ -29,10 +32,17 @@ function updateMinScore(value) {
   minScoreLabelEl.textContent = `匹配度 ≥ ${score}%`;
 }
 
-chrome.storage.local.get(["apiUrl", "resume_text", "min_score", "exclude_keywords"], (data) => {
+function normalizeDailyGoal(value) {
+  const goal = Number.parseInt(value, 10);
+  if (!Number.isFinite(goal)) return DEFAULT_DAILY_GOAL;
+  return Math.max(1, Math.min(100, goal));
+}
+
+chrome.storage.local.get(["apiUrl", "resume_text", "min_score", "exclude_keywords", "daily_goal"], (data) => {
   apiUrlEl.value = data.apiUrl || DEFAULT_API;
   resumeTextEl.value = data.resume_text || "";
   excludeKeywordsEl.value = data.exclude_keywords || "";
+  dailyGoalEl.value = normalizeDailyGoal(data.daily_goal);
   updateResumeStatus(Boolean(data.resume_text));
   updateMinScore(data.min_score || DEFAULT_MIN_SCORE);
 });
@@ -40,6 +50,9 @@ chrome.storage.local.get(["apiUrl", "resume_text", "min_score", "exclude_keyword
 apiUrlEl.addEventListener("change", saveConfig);
 excludeKeywordsEl.addEventListener("input", () => {
   chrome.storage.local.set({ exclude_keywords: excludeKeywordsEl.value || "" });
+});
+dailyGoalEl.addEventListener("input", () => {
+  chrome.storage.local.set({ daily_goal: normalizeDailyGoal(dailyGoalEl.value) });
 });
 
 saveResumeBtn.addEventListener("click", () => {

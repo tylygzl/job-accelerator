@@ -44,6 +44,10 @@
     <label for="excludeKeywords">排除关键词</label>
     <input id="excludeKeywords" type="text" placeholder="排除关键词，逗号分隔（如：培训,保险,销售）">
   </div>
+  <div class="section">
+    <label for="dailyGoal">今日目标沟通数</label>
+    <input id="dailyGoal" type="number" min="1" max="100" step="1" value="10">
+  </div>
   <div class="hint">点击后会在 BOSS 页面右侧打开分析面板，后端读取同目录的 skills.json。</div>
   <button class="btn" id="analyzeBtn">分析当前页面岗位</button>
   <div class="status" id="status"></div>

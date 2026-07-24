@@ -6,6 +6,7 @@
   const MATCH_CACHE_PREFIX = "job_match_v4_";
   const JOB_STATUS_PREFIX = "job_status_";
   const PENDING_CHAT_KEY = "job_accelerator_pending_chat";
+  const CHAT_HELPER_ID = "job-accelerator-chat-helper";
   const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
   const REQUEST_TIMEOUT_MS = 60 * 1000;
   const CHAT_CONFIRM_WAIT_MS = 90 * 1000;
@@ -31,9 +32,12 @@
   let paused = false;
   let resumeWaiter = null;
   let activeMinScore = 80;
+  let activeDailyGoal = 0;
+  let hideLowMatches = false;
   let pageNo = parseInt(new URL(location.href).searchParams.get("page") || "1", 10);
   const statuses = {};
   const renderedJobs = new Map();
+  let latestJobs = [];
 
   hydrateStatuses().catch(() => {});
   autoFillPendingChat().catch(() => {});
@@ -153,11 +157,12 @@
       return;
     }
 
-    const cfg = await storageGet(["apiUrl", "resume_text", "min_score"]);
+    const cfg = await storageGet(["apiUrl", "resume_text", "min_score", "daily_goal"]);
     const api = cfg.apiUrl || DEFAULT_API;
     const resumeText = String(cfg.resume_text || "");
     const resumeKey = resumeText ? simpleHash(resumeText) : "";
     activeMinScore = normalizeMinScore(cfg.min_score);
+    activeDailyGoal = normalizeDailyGoal(cfg.daily_goal);
     jobs = await enrichSearchJobsWithDetails(jobs, resumeKey);
     const completed = new Map();
     const currentJobs = () => jobs.map((item) => completed.get(cacheKeyFor(item)) || item);
@@ -341,12 +346,34 @@
   function render(jobs) {
     const container = panel?.querySelector("#job-accelerator-results");
     if (!container) return;
-    const sorted = [...jobs].sort((a, b) => scoreOf(b) - scoreOf(a));
+    latestJobs = jobs;
+    const sorted = sortJobsForDisplay(jobs);
+    const visibleJobs = sorted.filter((job) => !shouldHideLowMatch(job));
     renderedJobs.clear();
     sorted.forEach((job) => renderedJobs.set(cacheKeyFor(job), job));
-    container.innerHTML = sorted.map((job) => cardHtml(job)).join("");
+    container.innerHTML = visibleJobs.length
+      ? visibleJobs.map((job) => cardHtml(job)).join("")
+      : '<div class="empty">本页低匹配岗位已清理</div>';
     bindCards();
     refreshStats(sorted);
+  }
+
+  function sortJobsForDisplay(jobs) {
+    return [...jobs].sort((a, b) => {
+      const aStatus = statuses[statusKeyFor(a)] || "";
+      const bStatus = statuses[statusKeyFor(b)] || "";
+      const aSkipped = aStatus === "skip" ? 1 : 0;
+      const bSkipped = bStatus === "skip" ? 1 : 0;
+      if (aSkipped !== bSkipped) return aSkipped - bSkipped;
+      const aReady = scoreOf(a) >= activeMinScore ? 1 : 0;
+      const bReady = scoreOf(b) >= activeMinScore ? 1 : 0;
+      if (aReady !== bReady) return bReady - aReady;
+      return scoreOf(b) - scoreOf(a);
+    });
+  }
+
+  function shouldHideLowMatch(job) {
+    return hideLowMatches && job.match && !job.error && scoreOf(job) < activeMinScore;
   }
 
   function cardHtml(job) {
@@ -389,7 +416,7 @@
 #job-accelerator-panel{position:fixed;top:0;right:0;width:390px;height:100vh;background:#151820;color:#e6e8ee;z-index:999999;box-shadow:-4px 0 24px #0008;overflow-y:auto;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:18px}
 #job-accelerator-panel h3{margin:0 0 12px;font-size:16px;color:#fff}
 #job-accelerator-panel .close{position:absolute;top:12px;right:14px;background:transparent;border:0;color:#b8c0d4;font-size:20px;cursor:pointer}
-#job-accelerator-panel .pager{display:flex;gap:8px;margin-bottom:12px;align-items:center}
+#job-accelerator-panel .pager{display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap}
 #job-accelerator-panel .pager button{padding:6px 10px;font-size:12px;background:#202636;border:1px solid #384255;color:#d8deea;border-radius:6px;cursor:pointer}
 #job-accelerator-panel .pager button:disabled{opacity:.35;cursor:not-allowed}
 #job-accelerator-panel .pager span{font-size:12px;color:#aeb6c8}
@@ -424,8 +451,9 @@
   <button id="job-accelerator-next">下一页</button>
   <button id="job-accelerator-refresh">刷新</button>
   <button id="job-accelerator-pause">暂停</button>
+  <button id="job-accelerator-clear-low">清理低匹配</button>
 </div>
-<div class="stats" id="job-accelerator-stats">已分析 0 个 | 高匹配 0 | 中匹配 0 | 低匹配 0 | 已投 0 | 跳过 0</div>
+<div class="stats" id="job-accelerator-stats">已分析 0 个 | 达标 0 | 今日目标 0 | 已投 0 | 跳过 0</div>
 <div id="job-accelerator-results">${count ? '<div class="loading">正在分析...</div>' : '<div class="empty">未检测到岗位</div>'}</div>
 <div class="footer"><button class="export" id="job-accelerator-export">导出 CSV</button></div>`;
   }
@@ -440,6 +468,12 @@
     document.getElementById("job-accelerator-next")?.addEventListener("click", () => go(pageNo + 1));
     document.getElementById("job-accelerator-export")?.addEventListener("click", exportCsv);
     document.getElementById("job-accelerator-pause")?.addEventListener("click", () => setPaused(!paused));
+    document.getElementById("job-accelerator-clear-low")?.addEventListener("click", () => {
+      hideLowMatches = true;
+      render(latestJobs);
+      const button = document.getElementById("job-accelerator-clear-low");
+      if (button) button.disabled = true;
+    });
   }
 
   function bindCards() {
@@ -593,12 +627,18 @@
     const items = await storageGet([PENDING_CHAT_KEY]);
     const pending = items[PENDING_CHAT_KEY];
     const message = String(pending?.opening_message || "").trim();
-    if (!message || pending.filledAt || isStalePendingChat(pending)) return;
+    if (!message || isStalePendingChat(pending)) return;
+    if (pending.filledAt) {
+      renderChatHelper(pending);
+      return;
+    }
 
     const input = await waitForChatInput();
     if (!input) return;
     fillChatInput(input, message);
-    await storageSet({ [PENDING_CHAT_KEY]: { ...pending, filledAt: new Date().toISOString() } });
+    const updated = { ...pending, filledAt: new Date().toISOString() };
+    await storageSet({ [PENDING_CHAT_KEY]: updated });
+    renderChatHelper(updated);
   }
 
   function watchChatRoute() {
@@ -608,6 +648,42 @@
       lastHref = location.href;
       if (isBossChatPage()) autoFillPendingChat().catch(() => {});
     }, 500);
+  }
+
+  function renderChatHelper(pending) {
+    document.getElementById(CHAT_HELPER_ID)?.remove();
+    const helper = document.createElement("div");
+    helper.id = CHAT_HELPER_ID;
+    helper.innerHTML = `<style>
+#${CHAT_HELPER_ID}{position:fixed;right:22px;bottom:88px;z-index:999999;background:#151820;color:#e6e8ee;border:1px solid #384255;border-radius:8px;box-shadow:0 8px 28px #0006;padding:12px;width:280px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+#${CHAT_HELPER_ID} .helper-title{font-size:13px;font-weight:700;margin-bottom:6px;color:#fff}
+#${CHAT_HELPER_ID} .helper-meta{font-size:11px;line-height:1.45;color:#aeb6c8;margin-bottom:10px}
+#${CHAT_HELPER_ID} .helper-actions{display:flex;gap:6px;flex-wrap:wrap}
+#${CHAT_HELPER_ID} button{font-size:12px;padding:6px 8px;border:1px solid #48536a;border-radius:6px;background:#202636;color:#d8deea;cursor:pointer}
+#${CHAT_HELPER_ID} button.primary{background:#2f80ed;border-color:#2f80ed;color:#fff}
+</style>
+<div class="helper-title">开场白已填入</div>
+<div class="helper-meta">${esc(pending.company || "")} · ${esc(pending.title || "")}<br>发送记录以 BOSS 消息列表为准。</div>
+<div class="helper-actions">
+  <button class="primary" data-helper-act="back">返回原页面</button>
+</div>`;
+    document.body.appendChild(helper);
+    helper.querySelector("[data-helper-act='back']")?.addEventListener("click", () => returnWithoutMarking(pending));
+  }
+
+  async function returnWithoutMarking(pending) {
+    await storageRemove(PENDING_CHAT_KEY);
+    returnToSearchPage(pending);
+  }
+
+  function returnToSearchPage(pending) {
+    sessionStorage.setItem("job_accelerator_auto", "1");
+    const target = String(pending?.searchUrl || "");
+    if (target) {
+      location.href = target;
+    } else {
+      history.back();
+    }
   }
 
   async function waitForChatPageAndFill() {
@@ -734,10 +810,11 @@
       .filter((job) => job.match && !job.error)
       .forEach((job) => cache.set(cacheKeyFor(job), { job, match: job.match }));
 
-    const counts = { analyzed: 0, high: 0, mid: 0, low: 0, done: 0, skip: 0 };
+    const counts = { analyzed: 0, ready: 0, high: 0, mid: 0, low: 0, done: 0, skip: 0 };
     cache.forEach((entry) => {
       const score = scoreOf({ match: entry.match });
       counts.analyzed += 1;
+      if (score >= activeMinScore) counts.ready += 1;
       if (score >= 75) counts.high += 1;
       else if (score >= 50) counts.mid += 1;
       else counts.low += 1;
@@ -748,7 +825,7 @@
       if (status === "skip") counts.skip += 1;
     });
 
-    stat.textContent = `已分析 ${counts.analyzed} 个 | 高匹配 ${counts.high} | 中匹配 ${counts.mid} | 低匹配 ${counts.low} | 已投 ${counts.done} | 跳过 ${counts.skip}`;
+    stat.textContent = `已分析 ${counts.analyzed} 个 | 达标 ${counts.ready} | 今日目标 ${activeDailyGoal || "未设"} | 已投 ${counts.done} | 跳过 ${counts.skip}`;
   }
 
   function scoreOf(job) {
@@ -760,6 +837,12 @@
     const score = Number.parseInt(value, 10);
     if (!Number.isFinite(score)) return 80;
     return Math.max(50, Math.min(100, score));
+  }
+
+  function normalizeDailyGoal(value) {
+    const goal = Number.parseInt(value, 10);
+    if (!Number.isFinite(goal)) return 0;
+    return Math.max(1, Math.min(100, goal));
   }
 
   function text(root, selector) {
