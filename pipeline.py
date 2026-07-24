@@ -118,11 +118,12 @@ SKILL_MATCHER_PROMPT = """你是“技能匹配员”。你会收到 JD 拆解�
 - risk_level 只能是“低”“中”“高”：75分及以上低，50-74中，50以下高。
 - matched_skills 必须引用候选人 skills.json 中的 level/evidence/project。
 - missing_skills 不要扩大缺口，只列 JD 关心但候选人证据不足的点。
-- opening_message 必须用 opening_target 开头，第一句要点名 JD 里的一个具体要求或工作内容，不要只写“岗位匹配”。
-- opening_message 结构：公司/岗位切入 + JD具体要求 + 简历证据，80-140 字。
+- opening_message 必须用 opening_target 开头，第一句要写成“我看岗位里提到 X，这和我做过的 Y 比较契合...”，其中 X 必须来自 JD，Y 必须来自候选人证据。
+- opening_message 结构：公司/岗位切入 + JD具体要求 + 对应项目/技能证据，80-140 字。
+- 只写能和候选人证据挂上的 JD 要求；如果 JD 要求和简历证据挂不上，不要强行关联，改写“这块我只有部分交集”。
 - 如果 skills_profile/简历证据里包含 GitHub、Gitee、作品集或博客链接，可以自然提及；没有就不要写 GitHub，也不要写固定用户名。
 - 候选人证据必须来自 skills_profile 的 evidence/project，不要编造项目、指标或经历。
-- 不要写“我热爱”“学习能力强”“快速学习”“感兴趣”“期待交流”“希望给机会”“我重点匹配”等空话或模板句。
+- 不要写“JD强调”“证据是”“高度匹配”“我热爱”“学习能力强”“快速学习”“感兴趣”“期待交流”“希望给机会”“我重点匹配”等空话或模板句。
 - 50 分以下不要说高度匹配，只能写“有部分交集/建议先确认核心要求”。"""
 
 
@@ -1217,6 +1218,8 @@ def _opening_subject(report: dict[str, Any], jd_text: str = "") -> str:
 def _clean_jd_hook_line(line: str) -> str:
     clean = re.sub(r"\s+", " ", line or "").strip(" \t-#*，。；;")
     clean = re.sub(r"^(岗位详情|职位描述|岗位职责|工作职责|任职要求|岗位要求|任职资格|工作内容)[:：]?", "", clean).strip()
+    clean = re.sub(r"^[（(]?\s*[0-9一二三四五六七八九十]{1,3}\s*(?:[）)、.．:：]|[^\w\s])\s*", "", clean).strip()
+    clean = re.sub(r"^[0-9一二三四五六七八九十]{1,3}\s+", "", clean).strip()
     clean = re.sub(r"^(岗位|公司|薪资|地点)[:：].*$", "", clean).strip()
     if len(clean) > 54:
         for separator in ["。", "；", ";"]:
@@ -1250,10 +1253,10 @@ def _opening_jd_hook(jd_text: str, skills: list[str]) -> str:
 def _opening_hook_clause(jd_text: str, skills: list[str]) -> str:
     hook = _opening_jd_hook(jd_text, skills)
     if hook:
-        return f"JD 里强调{hook}"
+        return f"我看岗位里提到“{hook}”"
     if skills:
-        return f"核心要求集中在{'、'.join(skills[:2])}"
-    return "岗位要求需要进一步确认"
+        return f"我看岗位要求集中在{'、'.join(skills[:2])}"
+    return "我看岗位核心要求还需要进一步确认"
 
 
 def _opening_target(report: dict[str, Any], jd_text: str = "") -> str:
@@ -1304,8 +1307,8 @@ def _rule_opening(report: dict[str, Any], skills_profile: dict[str, Any], jd_tex
     hook_clause = _opening_hook_clause(jd_text, selected_skills)
     if not selected:
         if score < 50:
-            return f"{subject}，{hook_clause}，但和我的当前经历重合有限。我可以补充已有项目里的工程实践；{_opening_tail(skills_profile, '可展开实现细节')}"
-        return f"{subject}，{hook_clause}，和我做过的项目有交集。{_opening_tail(skills_profile, '可说明实现、指标和部署')}"
+            return f"{subject}，{hook_clause}，这块和我的当前经历重合有限；我能补充已有项目里的工程实践。{_opening_tail(skills_profile, '我可以直接讲实现细节')}"
+        return f"{subject}，{hook_clause}，我做过的项目里有部分工程经验能对上。{_opening_tail(skills_profile, '我可以直接讲实现、指标和部署过程')}"
 
     skills_text = "、".join(selected_skills)
     evidence_parts: list[str] = []
@@ -1318,10 +1321,10 @@ def _rule_opening(report: dict[str, Any], skills_profile: dict[str, Any], jd_tex
             evidence_parts.append(compact)
     evidence_text = "；".join(evidence_parts) or "已有项目中可复盘实现、指标和部署细节"
     if score < 50:
-        return f"{subject}，{hook_clause}，但和我的当前经历重合有限。可沟通的交集是{skills_text}；证据是：{evidence_text}。{_opening_tail(skills_profile, '可补充项目细节')}"
+        return f"{subject}，{hook_clause}，这块和我的经历只有部分交集；能先聊的是{skills_text}相关项目：{evidence_text}。{_opening_tail(skills_profile, '我可以补充项目细节')}"
     if score < 75:
-        return f"{subject}，{hook_clause}，其中{skills_text}能和我的项目对上。证据是：{evidence_text}。{_opening_tail(skills_profile, '可展开实现细节')}"
-    return f"{subject}，{hook_clause}，和我做过的{skills_text}项目衔接很直接。证据是：{evidence_text}。{_opening_tail(skills_profile, '可展开实现和部署')}"
+        return f"{subject}，{hook_clause}，其中{skills_text}和我做过的项目能对上：{evidence_text}。{_opening_tail(skills_profile, '我可以直接讲实现细节')}"
+    return f"{subject}，{hook_clause}，这和我做过的{skills_text}项目比较契合：{evidence_text}。{_opening_tail(skills_profile, '我可以直接讲实现取舍和部署过程')}"
 
 
 def _remove_unverified_public_proof(message: str) -> str:
@@ -1335,11 +1338,13 @@ def _sanitize_opening_message(message: Any, target: str, fallback: str, score: i
     if len(clean) < 20:
         return fallback
 
-    empty_words = ["我热爱", "学习能力强", "希望给机会", "希望贵公司给机会", "快速学习", "我重点匹配"]
+    empty_words = ["我热爱", "学习能力强", "希望给机会", "希望贵公司给机会", "快速学习", "我重点匹配", "高度匹配"]
     if any(empty_word in clean for empty_word in empty_words):
         return fallback
     clean = re.sub(r"招聘团队[，,。:：]*", "", clean).strip()
     clean = re.sub(r"您好[，,!！。]*", "", clean).strip()
+    clean = clean.replace("JD 里强调", "岗位里提到").replace("JD强调", "岗位里提到")
+    clean = clean.replace("证据是：", "我对应的经历是：").replace("证据是:", "我对应的经历是：")
     clean = re.sub(r"我是正在应聘[^。；;]{0,50}候选人[。；;]*", "", clean).strip()
     clean = re.sub(r"我对[^。；;]{0,50}感兴趣[，。；;!！]*", "", clean).strip()
     clean = re.sub(r"我对[^。；;]{0,50}有兴趣[，。；;!！]*", "", clean).strip()

@@ -4,7 +4,7 @@
 
   const DEFAULT_API = "http://localhost:8000/match";
   const DEFAULT_DAILY_GOAL = 10;
-  const MATCH_CACHE_PREFIX = "job_match_v5_";
+  const MATCH_CACHE_PREFIX = "job_match_v6_";
   const JOB_STATUS_PREFIX = "job_status_";
   const PENDING_CHAT_KEY = "job_accelerator_pending_chat";
   const CHAT_HELPER_ID = "job-accelerator-chat-helper";
@@ -19,7 +19,6 @@
   const DETAIL_SCAN_COOLDOWN_MS = 1000;
   const DETAIL_SCAN_BATCH_LIMIT = 50;
   const JOB_SCAN_LIMIT = 500;
-  const SEARCH_LOAD_TARGET = 50;
   const SEARCH_SCROLL_STEPS = 5;
   const SEARCH_SCROLL_STEP_MS = 160;
   const SEARCH_SCROLL_SETTLE_MS = 700;
@@ -45,7 +44,6 @@
   let activeMinScore = 80;
   let activeDailyGoal = 0;
   let hideLowMatches = false;
-  let pageNo = parseInt(new URL(location.href).searchParams.get("page") || "1", 10);
   const statuses = {};
   const renderedJobs = new Map();
   let sessionJobs = new Map();
@@ -73,7 +71,6 @@
     scanSummary = emptyScanSummary();
     sessionJobs = isBossSearchPage() ? loadSessionJobs() : new Map();
     latestJobs = sessionJobList();
-    pageNo = parseInt(new URL(location.href).searchParams.get("page") || "1", 10);
     panel = document.createElement("div");
     panel.id = "job-accelerator-panel";
     panel.innerHTML = shellHtml(0, "正在读取页面岗位...");
@@ -90,13 +87,6 @@
     panel.remove();
     panel = null;
     visible = false;
-  }
-
-  function go(page) {
-    rememberAutoOpenPanel();
-    const url = new URL(location.href);
-    url.searchParams.set("page", page);
-    location.href = url.toString();
   }
 
   function rememberAutoOpenPanel() {
@@ -137,7 +127,6 @@
 
   function emptyScanSummary() {
     return {
-      target: SEARCH_LOAD_TARGET,
       visible: 0,
       total: 0,
       added: 0,
@@ -284,7 +273,7 @@
     const node = panel?.querySelector("#job-accelerator-scan-summary");
     if (!node) return;
     const visible = scanSummary.visible || document.querySelectorAll(JOB_CARD_SELECTOR).length;
-    const textValue = `当前可见 ${visible} 个 | 本次累计 ${scanSummary.total} 个 | 新增 ${scanSummary.added} 个 | 缓存 ${scanSummary.cached} | 待请求 ${scanSummary.fresh} | 目标 ${scanSummary.target}`;
+    const textValue = `当前可见 ${visible} 个 | 本次累计 ${scanSummary.total} 个 | 新增 ${scanSummary.added} 个 | 缓存 ${scanSummary.cached} | 待请求 ${scanSummary.fresh}`;
     node.textContent = `${prefix ? `${prefix} ` : ""}${textValue}`;
   }
 
@@ -502,7 +491,6 @@
     const parts = [];
     if (batchTotal) parts.push(`当前批次 ${Math.min(batchCurrent, batchTotal)}/${batchTotal}`);
     parts.push(`本次处理 ${current}/${total}`);
-    parts.push(`本次目标 ${SEARCH_LOAD_TARGET}`);
     container.innerHTML = `<div class="loading">${esc(action)}<br>${esc(parts.join(" · "))}<br>${esc(job.title || "")} · ${esc(job.company || "")}</div>`;
   }
 
@@ -730,8 +718,6 @@
 <button class="close" id="job-accelerator-close">×</button>
 <h3>求职加速器</h3>
 <div class="pager">
-  <button id="job-accelerator-prev"${pageNo <= 1 ? " disabled" : ""}>上一页</button>
-  <span>第 ${pageNo} 页</span>
   <button id="job-accelerator-next">继续扫描</button>
   <button id="job-accelerator-refresh">刷新</button>
   <button id="job-accelerator-pause">暂停</button>
@@ -749,7 +735,6 @@
       hide();
       setTimeout(show, 100);
     });
-    document.getElementById("job-accelerator-prev")?.addEventListener("click", () => go(pageNo - 1));
     document.getElementById("job-accelerator-next")?.addEventListener("click", continueScan);
     document.getElementById("job-accelerator-export")?.addEventListener("click", exportCsv);
     document.getElementById("job-accelerator-pause")?.addEventListener("click", () => setPaused(!paused));
