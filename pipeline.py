@@ -446,7 +446,8 @@ def llm_config_summary() -> dict[str, Any]:
         "llm_jd_decomposer": _use_llm_jd_decomposer(),
         "two_stage": True,
         "llm_min_score": _llm_min_score(),
-        "llm_resume_extractor": _use_llm_resume_extractor(),
+        "llm_resume_extractor": (not local_mode and bool(api_key) and _use_llm_resume_extractor()),
+        "llm_resume_extractor_mode": _llm_resume_extractor_mode(),
         "llm_matcher": _use_llm_matcher(),
         "llm_opening": _use_llm_opening(),
     }
@@ -472,8 +473,23 @@ def _use_llm_matcher() -> bool:
     return _env_value("JOB_ACCELERATOR_LLM_MATCHER", "LLM_MATCHER").lower() in {"1", "true", "yes", "on"}
 
 
+def _llm_resume_extractor_mode() -> str:
+    value = _env_value("JOB_ACCELERATOR_LLM_RESUME_EXTRACTOR", "LLM_RESUME_EXTRACTOR").lower()
+    if not value or value == "auto":
+        return "auto"
+    if value in {"1", "true", "yes", "on"}:
+        return "on"
+    if value in {"0", "false", "no", "off", "none", "local"}:
+        return "off"
+    return "auto"
+
+
 def _use_llm_resume_extractor() -> bool:
-    return _env_value("JOB_ACCELERATOR_LLM_RESUME_EXTRACTOR", "LLM_RESUME_EXTRACTOR").lower() in {"1", "true", "yes", "on"}
+    return _llm_resume_extractor_mode() in {"auto", "on"}
+
+
+def _resume_extract_attempts() -> int:
+    return max(1, _env_int(1, "JOB_ACCELERATOR_RESUME_EXTRACT_ATTEMPTS", "RESUME_EXTRACT_ATTEMPTS"))
 
 
 def _use_llm_opening() -> bool:
@@ -830,7 +846,7 @@ def _extract_resume_skills_profile(resume_text: str, llm: Any | None) -> dict[st
     profile: dict[str, Any] | None = None
 
     if llm is not None:
-        for _attempt in range(3):
+        for _attempt in range(_resume_extract_attempts()):
             try:
                 data = _invoke_json(
                     llm,
