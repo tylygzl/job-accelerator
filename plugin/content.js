@@ -4,7 +4,7 @@
 
   const DEFAULT_API = "http://localhost:8000/match";
   const DEFAULT_DAILY_GOAL = 10;
-  const MATCH_CACHE_PREFIX = "job_match_v4_";
+  const MATCH_CACHE_PREFIX = "job_match_v5_";
   const JOB_STATUS_PREFIX = "job_status_";
   const PENDING_CHAT_KEY = "job_accelerator_pending_chat";
   const CHAT_HELPER_ID = "job-accelerator-chat-helper";
