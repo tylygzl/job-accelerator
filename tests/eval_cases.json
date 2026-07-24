@@ -34,6 +34,14 @@
       "require_opening": false
     },
     {
+      "id": "ai_course_sales_low",
+      "label": "AI 课程销售低匹配",
+      "jd_text": "岗位：AI 课程顾问实习生\n公司：课匠堂\n职责：电话邀约客户、介绍 AI 课程、完成销售转化和社群运营。\n要求：表达能力强，能接受销售目标，有教育培训或课程顾问经验优先，了解 AI 工具更好。",
+      "expected_score_min": 0,
+      "expected_score_max": 35,
+      "require_opening": false
+    },
+    {
       "id": "robot_rl_mid_low",
       "label": "机器人算法偏低匹配",
       "jd_text": "岗位：算法实习生-模仿学习\n公司：深信服科技\n职责：参与机器人控制、模仿学习、行为克隆和强化学习算法实验。\n要求：熟悉 PyTorch 或 TensorFlow，了解强化学习、模仿学习、机器人运动规划，有论文复现或算法竞赛经验优先。",

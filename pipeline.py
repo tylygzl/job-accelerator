@@ -735,6 +735,72 @@ def _normalize_report(data: dict[str, Any], jd_analysis: JDAnalysis) -> MatchRep
     return _model_validate(MatchReport, data)  # type: ignore[return-value]
 
 
+def _contains_any(text: str, keywords: list[str]) -> bool:
+    lower = text.lower()
+    return any(keyword.lower() in lower for keyword in keywords)
+
+
+def _profile_matches_any(skills_profile: dict[str, Any], keywords: list[str]) -> bool:
+    try:
+        text = json.dumps(skills_profile, ensure_ascii=False).lower()
+    except TypeError:
+        text = str(skills_profile).lower()
+    return any(keyword.lower() in text for keyword in keywords)
+
+
+def _matched_report_text(report: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for group in ["matched_skills", "missing_skills"]:
+        for item in report.get(group, []) or []:
+            if isinstance(item, dict):
+                parts.extend(str(value) for value in item.values())
+    return " ".join(parts)
+
+
+def _score_cap_for_jd(jd_text: str, report: dict[str, Any], skills_profile: dict[str, Any]) -> tuple[int | None, str]:
+    jd_lower = jd_text.lower()
+    report_text = _matched_report_text(report).lower()
+    dev_terms = ["开发", "研发", "工程", "算法", "模型", "llm", "agent", "rag", "python", "fastapi", "langgraph", "langchain"]
+
+    if _contains_any(jd_lower, ["销售", "电话沟通", "邀约", "转化", "地推", "保险", "课程顾问", "带薪培训"]):
+        if not _contains_any(jd_lower, dev_terms):
+            return 35, "岗位核心是销售/培训，不是技术开发"
+
+    if _contains_any(jd_lower, ["内容审核", "内容鉴审", "审核", "数据标注", "标注", "运营协助"]):
+        if not _contains_any(jd_lower, ["开发", "研发", "算法", "模型训练", "模型评测"]):
+            return 45, "岗位核心是审核/标注/运营，不是 AI 应用开发"
+
+    if _contains_any(jd_lower, ["强化学习", "模仿学习", "行为克隆", "逆强化学习", "机器人", "运动规划"]):
+        rl_evidence = ["pytorch", "tensorflow", "强化学习", "模仿学习", "行为克隆", "机器人", "深度学习"]
+        if not _profile_matches_any(skills_profile, rl_evidence) and not _contains_any(report_text, rl_evidence):
+            return 55, "岗位强依赖机器人/强化学习证据，当前简历证据不足"
+
+    if _contains_any(jd_lower, ["pytorch", "tensorflow", "深度学习", "机器学习算法"]):
+        ml_evidence = ["pytorch", "tensorflow", "深度学习", "机器学习", "算法竞赛", "论文复现"]
+        if not _profile_matches_any(skills_profile, ml_evidence) and not _contains_any(report_text, ml_evidence):
+            return 60, "岗位强依赖机器学习框架或算法证据，当前简历证据不足"
+
+    return None, ""
+
+
+def _apply_score_guardrails(report: dict[str, Any], jd_text: str, skills_profile: dict[str, Any]) -> dict[str, Any]:
+    cap, reason = _score_cap_for_jd(jd_text, report, skills_profile)
+    if cap is None:
+        return report
+
+    score = _coerce_score(report.get("match_score", 0))
+    if score <= cap:
+        return report
+
+    guarded = dict(report)
+    guarded["match_score"] = cap
+    guarded["risk_level"] = _risk_level(cap)
+    suggestions = list(guarded.get("suggestions") or [])
+    suggestions.insert(0, f"分数封顶：{reason}，最高 {cap} 分。")
+    guarded["suggestions"] = suggestions[:5]
+    return guarded
+
+
 def build_match_graph(llm: Any | None = None) -> Any:
     llm = _bind_json_mode(llm)
 
@@ -968,6 +1034,7 @@ def match_jd(
     graph = build_match_graph(active_llm)
     state = graph.invoke({"jd_text": jd_text, "skills_profile": profile})
     report = _model_dump(_model_validate(MatchReport, state["report"]))  # type: ignore[arg-type]
+    report = _apply_score_guardrails(report, jd_text, profile)
     report["opening_message"] = generate_opening(report, profile, jd_text)
     return report
 
