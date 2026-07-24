@@ -45,7 +45,8 @@ def evaluate_case(case: dict[str, Any], resume_text: str, use_llm: bool) -> dict
     max_score = int(case["expected_score_max"])
     opening = str(report.get("opening_message", "")).strip()
     in_range = min_score <= score <= max_score
-    opening_ok = not case.get("require_opening") or ("tylygzl" in opening and len(opening) >= 20)
+    empty_words = ["我热爱", "学习能力强", "快速学习", "希望给机会", "我重点匹配"]
+    opening_ok = not case.get("require_opening") or (len(opening) >= 20 and not any(word in opening for word in empty_words))
     return {
         "id": case["id"],
         "label": case["label"],

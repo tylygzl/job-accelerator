@@ -119,7 +119,8 @@ SKILL_MATCHER_PROMPT = """你是“技能匹配员”。你会收到 JD 拆解�
 - matched_skills 必须引用候选人 skills.json 中的 level/evidence/project。
 - missing_skills 不要扩大缺口，只列 JD 关心但候选人证据不足的点。
 - opening_message 必须用 opening_target 开头，第一句要点名 JD 里的一个具体要求或工作内容，不要只写“岗位匹配”。
-- opening_message 结构：公司/岗位切入 + JD具体要求 + 简历证据 + GitHub: tylygzl，80-140 字。
+- opening_message 结构：公司/岗位切入 + JD具体要求 + 简历证据，80-140 字。
+- 如果 skills_profile/简历证据里包含 GitHub、Gitee、作品集或博客链接，可以自然提及；没有就不要写 GitHub，也不要写固定用户名。
 - 候选人证据必须来自 skills_profile 的 evidence/project，不要编造项目、指标或经历。
 - 不要写“我热爱”“学习能力强”“快速学习”“感兴趣”“期待交流”“希望给机会”“我重点匹配”等空话或模板句。
 - 50 分以下不要说高度匹配，只能写“有部分交集/建议先确认核心要求”。"""
@@ -138,6 +139,7 @@ RESUME_SKILL_EXTRACTOR_PROMPT = """从以下简历提取技能列表，格式跟
   "projects": [
     {"skill": "项目名或项目相关技能", "level": "项目经验", "evidence": "项目证据、技术栈或成果"}
   ],
+  "public_profiles": ["GitHub/Gitee/作品集/博客链接；简历没有就空数组"],
   "target_profile": {
     "target_roles": ["适合投递的岗位名称"],
     "core_domains": ["候选人的核心求职方向"],
@@ -150,6 +152,7 @@ RESUME_SKILL_EXTRACTOR_PROMPT = """从以下简历提取技能列表，格式跟
 - must_have 放简历中证据明确、能作为核心竞争力的技能。
 - familiar 放有接触但证据较弱或熟悉程度较浅的技能。
 - projects 放能支撑技能判断的项目证据。
+- public_profiles 只放简历原文明确出现的公开作品链接或账号，不要编造。
 - target_profile 必须根据简历证据推断，不要写死行业；例如 AI Agent 候选人适合 AI 应用/后端/RAG，机器人候选人适合机器人/强化学习，销售候选人适合销售/BD。
 - 不要编造简历没有出现的技能或项目。"""
 
@@ -575,9 +578,31 @@ def _normalize_resume_profile(data: dict[str, Any]) -> dict[str, Any]:
         },
         "weaknesses": [],
         "projects": projects,
+        "public_profiles": _string_list(data.get("public_profiles")),
     }
     profile["target_profile"] = _normalize_target_profile(data, profile)
     return profile
+
+
+def _extract_public_profiles(text: str) -> list[str]:
+    profiles: list[str] = []
+
+    def add(value: str) -> None:
+        clean = value.strip(" \t\r\n，。；;()（）[]【】<>")
+        if clean and clean not in profiles:
+            profiles.append(clean)
+
+    for match in re.finditer(r"https?://[^\s\"'，。；;()（）<>]+", text or "", flags=re.I):
+        url = match.group(0)
+        if _contains_any(url, ["github.com", "gitee.com", "gitlab.com", "juejin.cn", "zhihu.com", "notion.site"]):
+            add(url)
+
+    for match in re.finditer(r"(?:GitHub|Gitee|GitLab|作品集|个人网站|博客)\s*[:：]\s*([A-Za-z0-9][A-Za-z0-9_.\-/]{1,80})", text or "", flags=re.I):
+        add(match.group(0))
+    for match in re.finditer(r"(?:GitHub|Gitee|GitLab)\s*(?:用户名|账号|主页|profile)\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9_.-]{1,80})", text or "", flags=re.I):
+        add(match.group(0))
+
+    return profiles[:5]
 
 
 def _resume_keyword_evidence(resume_text: str, alias: str) -> str:
@@ -637,6 +662,7 @@ def _fallback_resume_skills_profile(resume_text: str) -> dict[str, Any] | None:
         },
         "weaknesses": [],
         "projects": projects,
+        "public_profiles": _extract_public_profiles(resume_text),
     }
     profile["target_profile"] = _infer_target_profile(profile)
     return profile if _candidate_skill_items(profile) else None
@@ -1118,6 +1144,51 @@ def _compact_evidence(text: str, limit: int = 72) -> str:
     return clean[:limit].rstrip(" ，。；;") + "..."
 
 
+def _profile_json_text(skills_profile: dict[str, Any]) -> str:
+    try:
+        return json.dumps(skills_profile, ensure_ascii=False)
+    except TypeError:
+        return str(skills_profile)
+
+
+def _opening_public_proof(skills_profile: dict[str, Any]) -> str:
+    if not isinstance(skills_profile, dict):
+        return ""
+    candidates = [str(item) for item in skills_profile.get("public_profiles", []) or []]
+    candidates.append(_profile_json_text(skills_profile))
+    text = "\n".join(candidates)
+
+    github_url = re.search(r"(?:https?://)?(?:www\.)?github\.com/([A-Za-z0-9-]{1,39})(?:[/?#\s\"'，。；;]|$)", text, flags=re.I)
+    if github_url:
+        return f"GitHub: {github_url.group(1)}"
+
+    github_name = re.search(r"(?:GitHub|github)\s*(?:用户名|账号|主页|profile)?\s*[:：]\s*([A-Za-z0-9][A-Za-z0-9-]{1,38})", text, flags=re.I)
+    if github_name:
+        name = github_name.group(1)
+        if name.lower() not in {"github", "git", "readme"}:
+            return f"GitHub: {name}"
+    github_name = re.search(r"(?:GitHub|github)\s*(?:用户名|账号|主页|profile)\s*[:：]?\s*([A-Za-z0-9][A-Za-z0-9-]{1,38})", text, flags=re.I)
+    if github_name:
+        name = github_name.group(1)
+        if name.lower() not in {"github", "git", "readme"}:
+            return f"GitHub: {name}"
+
+    gitee_url = re.search(r"(?:https?://)?(?:www\.)?gitee\.com/([A-Za-z0-9_.-]{1,60})(?:[/?#\s\"'，。；;]|$)", text, flags=re.I)
+    if gitee_url:
+        return f"Gitee: {gitee_url.group(1)}"
+
+    for url in re.findall(r"https?://[^\s\"'，。；;()（）<>]+", text, flags=re.I):
+        if _contains_any(url, ["gitlab.com", "juejin.cn", "zhihu.com", "notion.site"]):
+            return f"作品集: {url}"
+
+    return ""
+
+
+def _opening_tail(skills_profile: dict[str, Any], action: str) -> str:
+    proof = _opening_public_proof(skills_profile)
+    return f"{proof}，{action}。" if proof else f"{action}。"
+
+
 def _opening_role(report: dict[str, Any], jd_text: str = "") -> str:
     for line in jd_text.splitlines():
         clean = line.strip()
@@ -1233,8 +1304,8 @@ def _rule_opening(report: dict[str, Any], skills_profile: dict[str, Any], jd_tex
     hook_clause = _opening_hook_clause(jd_text, selected_skills)
     if not selected:
         if score < 50:
-            return f"{subject}，{hook_clause}，但和我的当前经历重合有限。我可以补充求职加速器里多 Agent、FastAPI 和浏览器插件的工程实践；GitHub: tylygzl。"
-        return f"{subject}，{hook_clause}，和我做过的求职加速器项目有交集。我可以说明实现、指标和部署；GitHub: tylygzl。"
+            return f"{subject}，{hook_clause}，但和我的当前经历重合有限。我可以补充已有项目里的工程实践；{_opening_tail(skills_profile, '可展开实现细节')}"
+        return f"{subject}，{hook_clause}，和我做过的项目有交集。{_opening_tail(skills_profile, '可说明实现、指标和部署')}"
 
     skills_text = "、".join(selected_skills)
     evidence_parts: list[str] = []
@@ -1247,13 +1318,19 @@ def _rule_opening(report: dict[str, Any], skills_profile: dict[str, Any], jd_tex
             evidence_parts.append(compact)
     evidence_text = "；".join(evidence_parts) or "已有项目中可复盘实现、指标和部署细节"
     if score < 50:
-        return f"{subject}，{hook_clause}，但和我的当前经历重合有限。可沟通的交集是{skills_text}；证据是：{evidence_text}。GitHub: tylygzl。"
+        return f"{subject}，{hook_clause}，但和我的当前经历重合有限。可沟通的交集是{skills_text}；证据是：{evidence_text}。{_opening_tail(skills_profile, '可补充项目细节')}"
     if score < 75:
-        return f"{subject}，{hook_clause}，其中{skills_text}能和我的项目对上。证据是：{evidence_text}。GitHub: tylygzl，可展开实现细节。"
-    return f"{subject}，{hook_clause}，和我做过的{skills_text}项目衔接很直接。证据是：{evidence_text}。GitHub: tylygzl，可展开实现和部署。"
+        return f"{subject}，{hook_clause}，其中{skills_text}能和我的项目对上。证据是：{evidence_text}。{_opening_tail(skills_profile, '可展开实现细节')}"
+    return f"{subject}，{hook_clause}，和我做过的{skills_text}项目衔接很直接。证据是：{evidence_text}。{_opening_tail(skills_profile, '可展开实现和部署')}"
 
 
-def _sanitize_opening_message(message: Any, target: str, fallback: str, score: int) -> str:
+def _remove_unverified_public_proof(message: str) -> str:
+    clean = re.sub(r"(?:相关代码和项目记录在\s*)?GitHub[:：]\s*[A-Za-z0-9][A-Za-z0-9-]{1,38}[，,。；;]*", "", message, flags=re.I)
+    clean = re.sub(r"https?://(?:www\.)?github\.com/[^\s\"'，。；;()（）<>]+[，,。；;]*", "", clean, flags=re.I)
+    return re.sub(r"\s+", " ", clean).strip(" ，。；;")
+
+
+def _sanitize_opening_message(message: Any, target: str, fallback: str, score: int, skills_profile: dict[str, Any]) -> str:
     clean = re.sub(r"\s+", " ", str(message or "")).strip(" 「」\"'")
     if len(clean) < 20:
         return fallback
@@ -1267,8 +1344,8 @@ def _sanitize_opening_message(message: Any, target: str, fallback: str, score: i
     clean = re.sub(r"我对[^。；;]{0,50}感兴趣[，。；;!！]*", "", clean).strip()
     clean = re.sub(r"我对[^。；;]{0,50}有兴趣[，。；;!！]*", "", clean).strip()
     clean = re.sub(r"(期待|希望)[^。；;]{0,30}(交流|沟通)[。；;!！]*$", "", clean).strip()
-    clean = re.sub(r"GitHub[（(]\s*tylygzl\s*[）)]", "GitHub: tylygzl", clean, flags=re.I)
-    clean = re.sub(r"GitHub[:：]?\s*tylygzl", "GitHub: tylygzl", clean, flags=re.I)
+    clean = re.sub(r"GitHub[（(]\s*([A-Za-z0-9][A-Za-z0-9-]{1,38})\s*[）)]", r"GitHub: \1", clean, flags=re.I)
+    clean = re.sub(r"GitHub[:：]\s*([A-Za-z0-9][A-Za-z0-9-]{1,38})", r"GitHub: \1", clean, flags=re.I)
     clean = re.sub(r"(虽然|但是|同时|另外|此外)[。；;!！]*$", "", clean).strip()
     generic_patterns = [
         r"^(这个|该)?岗位(和|跟)我的技能(高度|非常)?匹配",
@@ -1281,17 +1358,21 @@ def _sanitize_opening_message(message: Any, target: str, fallback: str, score: i
     if score < 50:
         clean = clean.replace("高度匹配", "有部分工程交集").replace("非常匹配", "有部分交集")
 
-    if "GitHub: tylygzl" not in clean:
-        clean = clean.rstrip(" ，。；;") + "。GitHub: tylygzl。"
+    proof = _opening_public_proof(skills_profile)
+    if proof:
+        if proof not in clean:
+            clean = clean.rstrip(" ，。；;") + f"。{proof}。"
+    else:
+        clean = _remove_unverified_public_proof(clean)
 
     if target and target != "这个岗位" and not clean.startswith(target):
         clean = f"{target}的这个岗位，{clean}"
 
     clean = re.sub(r"\s+", " ", clean).strip()
     if len(clean) > 180:
-        if "GitHub: tylygzl" in clean:
-            prefix = clean.split("GitHub: tylygzl", 1)[0]
-            clean = prefix[:155].rstrip(" ，。；;") + "。GitHub: tylygzl。"
+        if proof and proof in clean:
+            prefix = clean.split(proof, 1)[0]
+            clean = prefix[:155].rstrip(" ，。；;") + f"。{proof}。"
         else:
             clean = clean[:170].rstrip(" ，。；;") + "。"
     return clean if len(clean) >= 20 else fallback
@@ -1303,7 +1384,7 @@ def generate_opening(report: dict[str, Any], skills_profile: dict[str, Any], jd_
     score = _coerce_score(report.get("match_score", 0))
     model_opening = report.get("opening_message", "")
     if model_opening:
-        return _sanitize_opening_message(model_opening, target, fallback, score)
+        return _sanitize_opening_message(model_opening, target, fallback, score, skills_profile)
     return fallback
 
 
