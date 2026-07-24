@@ -3,10 +3,17 @@
   "use strict";
 
   const DEFAULT_API = "http://localhost:8000/match";
-  const MATCH_CACHE_PREFIX = "job_match_v3_";
+  const MATCH_CACHE_PREFIX = "job_match_v4_";
   const JOB_STATUS_PREFIX = "job_status_";
+  const PENDING_CHAT_KEY = "job_accelerator_pending_chat";
   const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
   const REQUEST_TIMEOUT_MS = 60 * 1000;
+  const CHAT_CONFIRM_WAIT_MS = 90 * 1000;
+  const DETAIL_SCAN_TIMEOUT_MS = 5 * 1000;
+  const DETAIL_SCAN_INTERVAL_MS = 200;
+  const DETAIL_SCAN_COOLDOWN_MS = 2000;
+  const DETAIL_SCAN_BATCH_LIMIT = 5;
+  const DETAIL_READY_RE = /职位描述|岗位职责|工作职责|任职要求|岗位要求|任职资格|工作内容/;
   const JOB_CARD_SELECTOR = ".job-card-box,.job-card-wrapper";
   const DETAIL_TEXT_SELECTORS = [
     ".job-detail .job-sec-text",
@@ -23,10 +30,14 @@
   let visible = false;
   let paused = false;
   let resumeWaiter = null;
+  let activeMinScore = 80;
   let pageNo = parseInt(new URL(location.href).searchParams.get("page") || "1", 10);
   const statuses = {};
+  const renderedJobs = new Map();
 
   hydrateStatuses().catch(() => {});
+  autoFillPendingChat().catch(() => {});
+  watchChatRoute();
 
   chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (request.action === "toggle") {
@@ -142,18 +153,20 @@
       return;
     }
 
-    const cfg = await storageGet(["apiUrl", "resume_text"]);
+    const cfg = await storageGet(["apiUrl", "resume_text", "min_score"]);
     const api = cfg.apiUrl || DEFAULT_API;
     const resumeText = String(cfg.resume_text || "");
     const resumeKey = resumeText ? simpleHash(resumeText) : "";
+    activeMinScore = normalizeMinScore(cfg.min_score);
+    jobs = await enrichSearchJobsWithDetails(jobs, resumeKey);
     const completed = new Map();
     const currentJobs = () => jobs.map((item) => completed.get(cacheKeyFor(item)) || item);
 
     const analyzeOne = async (job) => {
       const cacheKey = cacheKeyFor(job);
-      const cached = await storageGet(cacheKey);
-      if (cached[cacheKey] && cacheIsUsable(cached[cacheKey], resumeKey)) {
-        const entry = normalizeCacheEntry(cached[cacheKey], job);
+      const cachedEntry = await getUsableCachedEntry(job, resumeKey);
+      if (cachedEntry) {
+        const entry = normalizeCacheEntry(cachedEntry, job);
         return { ...job, ...entry.job, match: entry.match, cached: true };
       }
 
@@ -170,7 +183,6 @@
       } catch (error) {
         const reason = error?.name === "AbortError" ? `timeout after ${REQUEST_TIMEOUT_MS / 1000}s` : error.message;
         return { ...job, error: `Request failed: ${reason}` };
-        return { ...job, error: `请求失败：${error.message}` };
       }
     };
 
@@ -185,10 +197,153 @@
     }
   }
 
+  async function enrichSearchJobsWithDetails(jobs, resumeKey) {
+    if (!isBossSearchPage()) return jobs;
+    const enriched = [];
+    let scannedInBatch = 0;
+    for (let index = 0; index < jobs.length; index += 1) {
+      if (!panel) return [...enriched, ...jobs.slice(index)];
+      await waitIfPaused();
+      const job = jobs[index];
+      updateScanProgress(index + 1, jobs.length, job, "读取右侧 JD");
+
+      const cachedEntry = await getUsableCachedEntry(job, resumeKey);
+      if (cachedEntry) {
+        enriched.push(job);
+        continue;
+      }
+
+      if (scannedInBatch >= DETAIL_SCAN_BATCH_LIMIT) {
+        await pauseScanBatch(index, jobs.length);
+        scannedInBatch = 0;
+        await waitIfPaused();
+      }
+
+      const detailText = await readRightDetailForJob(job);
+      scannedInBatch += 1;
+      enriched.push(detailText ? { ...job, jd_text: buildJdText(job, detailText), detailLoaded: true } : job);
+      await sleep(DETAIL_SCAN_COOLDOWN_MS);
+    }
+    return enriched;
+  }
+
+  async function pauseScanBatch(index, total) {
+    setPaused(true);
+    const container = panel?.querySelector("#job-accelerator-results");
+    if (container) {
+      container.innerHTML = `<div class="loading">已读取 ${index}/${total} 个右侧 JD，自动暂停保护页面。<br>稍等几秒后点击“继续”扫描下一批。</div>`;
+    }
+  }
+
+  function updateScanProgress(current, total, job, action) {
+    const container = panel?.querySelector("#job-accelerator-results");
+    if (!container) return;
+    container.innerHTML = `<div class="loading">${esc(action)} ${current}/${total}<br>${esc(job.title || "")} · ${esc(job.company || "")}</div>`;
+  }
+
+  async function readRightDetailForJob(job) {
+    const card = sourceCardForJob(job);
+    if (!card) return "";
+    const before = detailSignature();
+    selectJobCard(card);
+    return waitForDetailText(before, job);
+  }
+
+  function sourceCardForJob(job) {
+    const index = Number(job.listIndex);
+    if (!Number.isInteger(index) || index < 0) return null;
+    return document.querySelectorAll(JOB_CARD_SELECTOR)[index] || null;
+  }
+
+  function selectJobCard(card) {
+    card.scrollIntoView({ block: "center", inline: "nearest" });
+    const target = card.querySelector(".job-name,.job-title") || card;
+    clickElement(target);
+  }
+
+  async function waitForDetailText(beforeSignature, job) {
+    const deadline = Date.now() + DETAIL_SCAN_TIMEOUT_MS;
+    let latest = "";
+    while (Date.now() < deadline) {
+      latest = extractDomJdText(document);
+      const detailText = selectedDetailPanelText();
+      const changed = detailSignature(latest) !== beforeSignature;
+      if (latest.length >= 40 && (changed || detailMatchesJob(job, detailText))) {
+        return latest;
+      }
+      await sleep(DETAIL_SCAN_INTERVAL_MS);
+    }
+    latest = extractDomJdText(document);
+    return latest.length >= 40 ? latest : "";
+  }
+
+  function selectedDetailPanelText() {
+    const root = findDetailRoot();
+    return root ? inlineText(root) : "";
+  }
+
+  function findDetailRoot() {
+    const selectors = [
+      ...DETAIL_TEXT_SELECTORS,
+      "[class*='job-detail']",
+      "[class*='detail-content']",
+      "[class*='detail-box']",
+    ];
+    const candidates = uniqueElements(selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector))))
+      .filter(isVisible)
+      .map((node) => ({ node, value: inlineText(node) }))
+      .filter((item) => item.value.length >= 40)
+      .sort((a, b) => {
+        const aReady = DETAIL_READY_RE.test(a.value) ? 1 : 0;
+        const bReady = DETAIL_READY_RE.test(b.value) ? 1 : 0;
+        return bReady - aReady || b.value.length - a.value.length;
+      });
+    return candidates[0]?.node || null;
+  }
+
+  function detailMatchesJob(job, detailText) {
+    const target = compactForMatch(job.title).slice(0, 8);
+    if (!target) return false;
+    return compactForMatch(detailText).includes(target);
+  }
+
+  function detailSignature(detailText = extractDomJdText(document)) {
+    return simpleHash(String(detailText || "").slice(0, 800));
+  }
+
+  async function getUsableCachedEntry(job, resumeKey) {
+    const cacheKey = cacheKeyFor(job);
+    const cached = await storageGet(cacheKey);
+    return cached[cacheKey] && cacheIsUsable(cached[cacheKey], resumeKey) ? cached[cacheKey] : null;
+  }
+
+  function isBossSearchPage() {
+    return location.href.includes("geek/jobs") && !location.href.includes("/job_detail/");
+  }
+
+  function uniqueElements(elements) {
+    return Array.from(new Set(elements.filter(Boolean)));
+  }
+
+  function isVisible(node) {
+    const rect = node.getBoundingClientRect?.();
+    return Boolean(rect && rect.width > 0 && rect.height > 0);
+  }
+
+  function compactForMatch(value) {
+    return String(value || "").replace(/\s|…|\.\.\.|（.*?）|\(.*?\)/g, "");
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   function render(jobs) {
     const container = panel?.querySelector("#job-accelerator-results");
     if (!container) return;
     const sorted = [...jobs].sort((a, b) => scoreOf(b) - scoreOf(a));
+    renderedJobs.clear();
+    sorted.forEach((job) => renderedJobs.set(cacheKeyFor(job), job));
     container.innerHTML = sorted.map((job) => cardHtml(job)).join("");
     bindCards();
     refreshStats(sorted);
@@ -196,7 +351,8 @@
 
   function cardHtml(job) {
     const statusKey = statusKeyFor(job);
-    const dataAttrs = `data-list-index="${esc(job.listIndex ?? "")}" data-url="${esc(job.url || "")}" data-key="${esc(statusKey)}"`;
+    const cacheKey = cacheKeyFor(job);
+    const dataAttrs = `data-list-index="${esc(job.listIndex ?? "")}" data-url="${esc(job.url || "")}" data-key="${esc(statusKey)}" data-cache-key="${esc(cacheKey)}"`;
     if (job.error) {
       return `<div class="card low" ${dataAttrs}><div class="title">请求失败 | ${esc(job.title)}</div><div class="meta">${esc(job.error)}</div></div>`;
     }
@@ -209,6 +365,7 @@
     const missing = (match.missing_skills || []).slice(0, 3);
     const questions = (match.interview_questions || []).slice(0, 3);
     const opening = String(match.opening_message || "").trim();
+    const canChat = score >= activeMinScore && opening;
 
     return `<div class="card ${level}" ${dataAttrs} style="${opacity}">
       <div class="title">${score}% | ${esc(match.role || job.title)}</div>
@@ -219,6 +376,7 @@
       ${questions.length ? `<div class="questions">${questions.map((question) => `<div>Q：${esc(question)}</div>`).join("")}</div>` : ""}
       ${opening ? `<div class="opening">📩 ${esc(opening)}</div>` : ""}
       <div class="actions">
+        ${canChat ? '<button data-chat="1">去沟通</button>' : ""}
         <button data-act="done" class="${status === "done" ? "on" : ""}">已投</button>
         <button data-act="skip" class="${status === "skip" ? "on" : ""}">跳过</button>
         <button data-act="save" class="${status === "save" ? "on" : ""}">收藏</button>
@@ -247,8 +405,11 @@
 #job-accelerator-panel .warn{background:#e5534b22;color:#ff9a94}
 #job-accelerator-panel .questions{font-size:11px;line-height:1.45;color:#c5ccda;margin-top:7px}
 #job-accelerator-panel .opening{font-size:11px;line-height:1.5;color:#66d9ef;margin-top:8px}
+#job-accelerator-panel .chat-error{font-size:11px;line-height:1.45;color:#ff9a94;margin-top:7px}
+#job-accelerator-panel .chat-info{font-size:11px;line-height:1.45;color:#8fb8ff;margin-top:7px}
 #job-accelerator-panel .actions{display:flex;gap:6px;margin-top:8px}
 #job-accelerator-panel .actions button{font-size:11px;padding:4px 8px;border:1px solid #48536a;border-radius:5px;background:transparent;color:#c5ccda;cursor:pointer}
+#job-accelerator-panel .actions button:disabled{opacity:.55;cursor:wait}
 #job-accelerator-panel .actions button.on{background:#2f80ed33;border-color:#2f80ed}
 #job-accelerator-panel .footer{position:sticky;bottom:0;background:#151820;padding:10px 0 0;margin-top:12px}
 #job-accelerator-panel .export{width:100%;padding:9px 10px;font-size:13px;font-weight:700;background:#2f80ed;border:0;border-radius:7px;color:#fff;cursor:pointer}
@@ -282,6 +443,23 @@
   }
 
   function bindCards() {
+    panel?.querySelectorAll("[data-chat]").forEach((button) => {
+      button.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        const card = button.closest(".card");
+        if (!card) return;
+        button.disabled = true;
+        button.textContent = "等待确认";
+        try {
+          await startChatFromPanelCard(card);
+        } catch (error) {
+          button.disabled = false;
+          button.textContent = "去沟通";
+          showCardError(card, error.message || "打开沟通失败");
+        }
+      });
+    });
+
     panel?.querySelectorAll("[data-act]").forEach((button) => {
       button.addEventListener("click", async (event) => {
         event.stopPropagation();
@@ -322,7 +500,168 @@
     const cards = document.querySelectorAll(JOB_CARD_SELECTOR);
     const sourceCard = index >= 0 ? cards[index] : null;
     const clickable = sourceCard?.querySelector("a[href*='job_detail'],a[href],.job-name,.job-title") || sourceCard;
-    clickable?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    if (clickable) clickElement(clickable);
+  }
+
+  async function startChatFromPanelCard(card) {
+    const cacheKey = card.dataset.cacheKey || "";
+    const job = renderedJobs.get(cacheKey);
+    if (!job?.match?.opening_message) throw new Error("没有可发送的开场白");
+
+    if (isBossSearchPage()) {
+      const sourceCard = sourceCardForJob(job);
+      if (!sourceCard) throw new Error("找不到左侧岗位卡片");
+      const before = detailSignature();
+      selectJobCard(sourceCard);
+      await waitForDetailText(before, job);
+    }
+
+    const chatButton = findChatButton();
+    if (!chatButton) throw new Error("找不到 BOSS 的立即沟通按钮");
+
+    await storageSet({ [PENDING_CHAT_KEY]: makePendingChat(job) });
+    clickElement(chatButton);
+    showCardInfo(card, "请在 BOSS 弹窗中手动确认，进入聊天页后会自动填入开场白。");
+    const opened = await waitForChatPageAndFill();
+    if (!opened && !isBossChatPage()) throw new Error("未进入沟通页");
+  }
+
+  function makePendingChat(job) {
+    return {
+      jobKey: cacheKeyFor(job),
+      statusKey: statusKeyFor(job),
+      title: job.title || "",
+      company: job.company || "",
+      opening_message: String(job.match?.opening_message || "").trim(),
+      searchUrl: location.href,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  function findChatButton() {
+    return findClickableByText(/^(立即沟通|继续沟通|开聊)$/);
+  }
+
+  function findClickableByText(pattern) {
+    const candidates = Array.from(document.querySelectorAll("button,a,[role='button'],.btn,.btn-primary"))
+      .filter(isVisible)
+      .filter((node) => pattern.test(inlineText(node)));
+    return candidates[0] || null;
+  }
+
+  function clickElement(node) {
+    const preventJavascriptUrl = (event) => {
+      if (isJavascriptHref(node)) event.preventDefault();
+    };
+    node.addEventListener("click", preventJavascriptUrl, { capture: true, once: true });
+    try {
+      ["mousedown", "mouseup", "click"].forEach((type) => {
+        node.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+      });
+    } finally {
+      node.removeEventListener("click", preventJavascriptUrl, { capture: true });
+    }
+  }
+
+  function isJavascriptHref(node) {
+    const link = node instanceof HTMLAnchorElement ? node : node.closest?.("a[href]");
+    return String(link?.getAttribute("href") || "").trim().toLowerCase().startsWith("javascript:");
+  }
+
+  function showCardError(card, message) {
+    let meta = card.querySelector(".chat-error");
+    if (!meta) {
+      meta = document.createElement("div");
+      meta.className = "chat-error";
+      card.appendChild(meta);
+    }
+    meta.textContent = message;
+  }
+
+  function showCardInfo(card, message) {
+    let meta = card.querySelector(".chat-info");
+    if (!meta) {
+      meta = document.createElement("div");
+      meta.className = "chat-info";
+      card.appendChild(meta);
+    }
+    meta.textContent = message;
+  }
+
+  async function autoFillPendingChat() {
+    if (!isBossChatPage()) return;
+    const items = await storageGet([PENDING_CHAT_KEY]);
+    const pending = items[PENDING_CHAT_KEY];
+    const message = String(pending?.opening_message || "").trim();
+    if (!message || pending.filledAt || isStalePendingChat(pending)) return;
+
+    const input = await waitForChatInput();
+    if (!input) return;
+    fillChatInput(input, message);
+    await storageSet({ [PENDING_CHAT_KEY]: { ...pending, filledAt: new Date().toISOString() } });
+  }
+
+  function watchChatRoute() {
+    let lastHref = location.href;
+    setInterval(() => {
+      if (location.href === lastHref) return;
+      lastHref = location.href;
+      if (isBossChatPage()) autoFillPendingChat().catch(() => {});
+    }, 500);
+  }
+
+  async function waitForChatPageAndFill() {
+    const deadline = Date.now() + CHAT_CONFIRM_WAIT_MS;
+    while (Date.now() < deadline) {
+      if (isBossChatPage()) {
+        await autoFillPendingChat();
+        return true;
+      }
+      await sleep(300);
+    }
+    return false;
+  }
+
+  function isBossChatPage() {
+    return location.href.includes("/web/geek/chat");
+  }
+
+  function isStalePendingChat(pending) {
+    const createdAt = Date.parse(pending?.createdAt || "");
+    return !Number.isFinite(createdAt) || Date.now() - createdAt > 10 * 60 * 1000;
+  }
+
+  async function waitForChatInput() {
+    const deadline = Date.now() + 10 * 1000;
+    while (Date.now() < deadline) {
+      const input = findChatInput();
+      if (input) return input;
+      await sleep(300);
+    }
+    return null;
+  }
+
+  function findChatInput() {
+    const candidates = Array.from(document.querySelectorAll("textarea,[contenteditable='true']"))
+      .filter(isVisible)
+      .filter((node) => {
+        const rect = node.getBoundingClientRect();
+        return rect.top > window.innerHeight * 0.45 && rect.width > 200;
+      });
+    return candidates.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0] || null;
+  }
+
+  function fillChatInput(input, message) {
+    input.focus();
+    if ("value" in input) {
+      input.value = message;
+    } else {
+      document.execCommand?.("selectAll", false, null);
+      document.execCommand?.("insertText", false, message);
+      if (!inlineText(input)) input.textContent = message;
+    }
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: message }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
   async function exportCsv() {
@@ -415,6 +754,12 @@
   function scoreOf(job) {
     const score = Number.parseFloat(job.match?.match_score || 0);
     return Number.isFinite(score) ? score : 0;
+  }
+
+  function normalizeMinScore(value) {
+    const score = Number.parseInt(value, 10);
+    if (!Number.isFinite(score)) return 80;
+    return Math.max(50, Math.min(100, score));
   }
 
   function text(root, selector) {
@@ -598,7 +943,7 @@
 
   function makeCacheEntry(job, match, resumeKey = "") {
     return {
-      version: 2,
+      version: 3,
       analyzedAt: new Date().toISOString(),
       resumeKey,
       job: {

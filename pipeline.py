@@ -9,12 +9,22 @@ from __future__ import annotations
 import json
 import os
 import re
+import copy
+import hashlib
+import threading
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
+
+
+_LLM_CACHE_READY = False
+_LLM_CACHE: Any | None = None
+_LLM_CACHE_LOCK = threading.Lock()
+_RESUME_PROFILE_CACHE: dict[str, dict[str, Any] | None] = {}
+_RESUME_PROFILE_LOCK = threading.Lock()
 
 
 class JDRequirement(BaseModel):
@@ -220,29 +230,41 @@ def load_skills_profile(path: str | Path | None = None) -> dict[str, Any]:
 
 
 def _make_llm() -> Any | None:
-    try:
-        from dotenv import load_dotenv
+    global _LLM_CACHE_READY, _LLM_CACHE
+    if _LLM_CACHE_READY:
+        return _LLM_CACHE
 
-        load_dotenv(Path(__file__).with_name(".env"))
-    except Exception:
-        pass
+    with _LLM_CACHE_LOCK:
+        if _LLM_CACHE_READY:
+            return _LLM_CACHE
 
-    api_key = os.getenv("DEEPSEEK_API_KEY")
-    print(f"[llm] DEEPSEEK_API_KEY={api_key[:4]}...{api_key[-4:]}" if api_key else "[llm] DEEPSEEK_API_KEY=<empty>")
-    if not api_key:
-        return None
+        try:
+            from dotenv import load_dotenv
 
-    proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or ""
+            load_dotenv(Path(__file__).with_name(".env"))
+        except Exception:
+            pass
 
-    model = ChatOpenAI(
-        model=os.getenv("DEEPSEEK_MODEL") or os.getenv("MODEL_NAME", "deepseek-v4-pro"),
-        api_key=api_key,
-        base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-        temperature=0,
-        timeout=float(os.getenv("JOB_ACCELERATOR_LLM_TIMEOUT", "45")),
-        openai_proxy=proxy if proxy else None,
-    )
-    return _bind_json_mode(model)
+        api_key = os.getenv("DEEPSEEK_API_KEY")
+        print(f"[llm] DEEPSEEK_API_KEY={api_key[:4]}...{api_key[-4:]}" if api_key else "[llm] DEEPSEEK_API_KEY=<empty>")
+        if not api_key:
+            _LLM_CACHE = None
+            _LLM_CACHE_READY = True
+            return None
+
+        proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or ""
+
+        model = ChatOpenAI(
+            model=os.getenv("DEEPSEEK_MODEL") or os.getenv("MODEL_NAME", "deepseek-v4-pro"),
+            api_key=api_key,
+            base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+            temperature=0,
+            timeout=float(os.getenv("JOB_ACCELERATOR_LLM_TIMEOUT", "45")),
+            openai_proxy=proxy if proxy else None,
+        )
+        _LLM_CACHE = _bind_json_mode(model)
+        _LLM_CACHE_READY = True
+        return _LLM_CACHE
 
 
 def _bind_json_mode(llm: Any | None) -> Any | None:
@@ -455,6 +477,18 @@ def _extract_resume_skills_profile(resume_text: str, llm: Any | None) -> dict[st
     matched_items = _candidate_skill_items(profile or {})
     print(f"[resume] extracted {len(skills)} skills")
     return profile if matched_items else None
+
+
+def _resume_cache_key(resume_text: str) -> str:
+    return hashlib.sha256(resume_text.encode("utf-8")).hexdigest()
+
+
+def _get_resume_skills_profile(resume_text: str, llm: Any | None) -> dict[str, Any] | None:
+    key = _resume_cache_key(resume_text)
+    with _RESUME_PROFILE_LOCK:
+        if key not in _RESUME_PROFILE_CACHE:
+            _RESUME_PROFILE_CACHE[key] = _extract_resume_skills_profile(resume_text, llm)
+        return copy.deepcopy(_RESUME_PROFILE_CACHE[key])
 
 
 def _infer_role(jd_text: str) -> str:
@@ -858,7 +892,7 @@ def match_jd(
     resume_text = (resume_text or "").strip()
     if resume_text:
         try:
-            resume_profile = _extract_resume_skills_profile(resume_text, active_llm)
+            resume_profile = _get_resume_skills_profile(resume_text, active_llm)
             if resume_profile:
                 profile = resume_profile
         except Exception:
