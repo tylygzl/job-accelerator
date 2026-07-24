@@ -12,7 +12,8 @@
   const MATCH_CACHE_LIMIT = 500;
   const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
   const AUTO_OPEN_TTL_MS = 2 * 60 * 1000;
-  const REQUEST_TIMEOUT_MS = 60 * 1000;
+  const REQUEST_TIMEOUT_MS = 120 * 1000;
+  const MATCH_API_CONCURRENCY = 1;
   const CHAT_CONFIRM_WAIT_MS = 90 * 1000;
   const DETAIL_SCAN_TIMEOUT_MS = 5 * 1000;
   const DETAIL_SCAN_INTERVAL_MS = 200;
@@ -52,6 +53,8 @@
   let scanSummary = emptyScanSummary();
   let analyzing = false;
   let scanningMore = false;
+  let analysisRunId = 0;
+  const activeFetchControllers = new Set();
 
   hydrateStatuses().catch(() => {});
   autoFillPendingChat().catch(() => {});
@@ -106,10 +109,24 @@
 
   function hide() {
     if (!panel) return;
+    cancelActiveAnalysis();
     setPaused(false);
     panel.remove();
     panel = null;
     visible = false;
+  }
+
+  function cancelActiveAnalysis() {
+    analysisRunId += 1;
+    activeFetchControllers.forEach((controller) => controller.abort());
+    activeFetchControllers.clear();
+    analyzing = false;
+    scanningMore = false;
+    if (resumeWaiter) {
+      resumeWaiter();
+      resumeWaiter = null;
+    }
+    setContinueButtonBusy(false);
   }
 
   function rememberAutoOpenPanel() {
@@ -321,6 +338,10 @@
   }
 
   async function refreshVisibleJobs(prefix = "扫描当前可见岗位。") {
+    if (analyzing) {
+      renderScanSummary("正在分析中，暂不加入新岗位。");
+      return 0;
+    }
     const cfg = await storageGet(["exclude_keywords", "resume_text", "min_score", "daily_goal"]);
     activeMinScore = normalizeMinScore(cfg.min_score);
     activeDailyGoal = normalizeDailyGoal(cfg.daily_goal);
@@ -329,7 +350,7 @@
     const newJobs = mergeSessionJobs(jobs);
     const unfinishedJobs = jobs
       .map((job) => sessionJobs.get(cacheKeyFor(job)) || job)
-      .filter((job) => !job.match && !job.error);
+      .filter((job) => !job.match && (!job.error || job.retryable));
     const jobsToAnalyze = uniqueJobs([...newJobs, ...unfinishedJobs]);
     scanSummary = await buildScanSummary(resumeKey, jobs.length, newJobs.length);
     renderScanSummary(prefix);
@@ -426,6 +447,7 @@
     if (analyzing) return;
     analyzing = true;
     setContinueButtonBusy(true);
+    const runId = analysisRunId;
     let resumeKeyForSummary = "";
 
     try {
@@ -437,6 +459,7 @@
       activeMinScore = normalizeMinScore(cfg.min_score);
       activeDailyGoal = normalizeDailyGoal(cfg.daily_goal);
       jobs = await enrichSearchJobsWithDetails(jobs, resumeKey);
+      if (runId !== analysisRunId || !panel) return;
       jobs.forEach((job) => sessionJobs.set(cacheKeyFor(job), mergeJobSnapshot(sessionJobs.get(cacheKeyFor(job)) || {}, job)));
       saveSessionJobs();
 
@@ -460,25 +483,29 @@
           pruneMatchCache().catch(() => {});
           return { ...job, match: data };
         } catch (error) {
-          return { ...job, error: formatAnalyzeError(error, api) };
+          return { ...job, error: formatAnalyzeError(error, api), retryable: isRetryableAnalyzeError(error) };
         }
       };
 
-      for (let index = 0; index < jobs.length; index += 3) {
+      for (let index = 0; index < jobs.length; index += MATCH_API_CONCURRENCY) {
+        if (runId !== analysisRunId || !panel) return;
         await waitIfPaused();
-        const batch = jobs.slice(index, index + 3);
+        const batch = jobs.slice(index, index + MATCH_API_CONCURRENCY);
         await Promise.all(batch.map(async (job) => {
           const result = await analyzeOne(job);
+          if (runId !== analysisRunId || !panel) return;
           sessionJobs.set(cacheKeyFor(job), result);
           saveSessionJobs();
           render(sessionJobList());
         }));
       }
     } finally {
-      scanSummary = await buildScanSummary(resumeKeyForSummary, scanSummary.visible, 0);
-      renderScanSummary("本批分析完成。");
-      analyzing = false;
-      setContinueButtonBusy(false);
+      if (runId === analysisRunId) {
+        scanSummary = await buildScanSummary(resumeKeyForSummary, scanSummary.visible, 0);
+        renderScanSummary("本批分析完成。");
+        analyzing = false;
+        setContinueButtonBusy(false);
+      }
     }
   }
 
@@ -1478,7 +1505,7 @@
   function formatAnalyzeError(error, api) {
     const message = String(error?.message || error || "");
     if (error?.name === "AbortError") {
-      return `请求超时：后端或 LLM 超过 ${REQUEST_TIMEOUT_MS / 1000}s 未返回。请检查 DeepSeek/API、代理，或稍后点刷新继续。`;
+      return `请求超时：后端或 LLM 超过 ${REQUEST_TIMEOUT_MS / 1000}s 未返回。这条会在下次刷新或继续扫描时重试。`;
     }
     if (/Failed to fetch|NetworkError|Load failed|fetch/i.test(message)) {
       return `后端未连接：请先运行 python server.py，再刷新插件。当前 API：${api}`;
@@ -1495,11 +1522,21 @@
     return `请求失败：${message || "未知错误"}。请确认后端服务和网络代理正常。`;
   }
 
+  function isRetryableAnalyzeError(error) {
+    const message = String(error?.message || error || "");
+    return Boolean(
+      error?.name === "AbortError" ||
+      /Failed to fetch|NetworkError|Load failed|fetch|HTTP 500|HTTP 502|HTTP 503|HTTP 504/i.test(message),
+    );
+  }
+
   function fetchWithTimeout(url, options = {}) {
     const controller = new AbortController();
+    activeFetchControllers.add(controller);
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     return fetch(url, { ...options, signal: controller.signal }).finally(() => {
       clearTimeout(timeoutId);
+      activeFetchControllers.delete(controller);
     });
   }
 
