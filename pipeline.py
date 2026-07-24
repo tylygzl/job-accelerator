@@ -280,12 +280,116 @@ def _masked_secret(value: str) -> str:
     return value[:4] + "..." + value[-4:]
 
 
+LLM_PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
+    "deepseek": {
+        "aliases": ["deepseek", "ds"],
+        "base_url": "https://api.deepseek.com/v1",
+        "base_url_envs": ["DEEPSEEK_BASE_URL"],
+        "api_key_envs": ["LLM_API_KEY", "DEEPSEEK_API_KEY"],
+        "model_envs": ["LLM_MODEL", "DEEPSEEK_MODEL", "MODEL_NAME"],
+        "default_model": "deepseek-v4-flash",
+    },
+    "volcengine": {
+        "aliases": ["volcengine", "doubao", "ark", "bytedance"],
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "base_url_envs": ["ARK_BASE_URL", "VOLCENGINE_BASE_URL"],
+        "api_key_envs": ["LLM_API_KEY", "ARK_API_KEY", "VOLCENGINE_API_KEY"],
+        "model_envs": ["LLM_MODEL", "ARK_MODEL", "VOLCENGINE_MODEL", "MODEL_NAME"],
+        "default_model": "doubao-pro-32k-240615",
+    },
+    "qwen": {
+        "aliases": ["qwen", "dashscope", "aliyun", "alibaba"],
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "base_url_envs": ["DASHSCOPE_BASE_URL", "QWEN_BASE_URL"],
+        "api_key_envs": ["LLM_API_KEY", "DASHSCOPE_API_KEY", "QWEN_API_KEY"],
+        "model_envs": ["LLM_MODEL", "DASHSCOPE_MODEL", "QWEN_MODEL", "MODEL_NAME"],
+        "default_model": "qwen-plus",
+    },
+    "moonshot": {
+        "aliases": ["moonshot", "kimi"],
+        "base_url": "https://api.moonshot.cn/v1",
+        "base_url_envs": ["MOONSHOT_BASE_URL", "KIMI_BASE_URL"],
+        "api_key_envs": ["LLM_API_KEY", "MOONSHOT_API_KEY", "KIMI_API_KEY"],
+        "model_envs": ["LLM_MODEL", "MOONSHOT_MODEL", "KIMI_MODEL", "MODEL_NAME"],
+        "default_model": "moonshot-v1-8k",
+    },
+    "zhipu": {
+        "aliases": ["zhipu", "glm", "bigmodel"],
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "base_url_envs": ["ZHIPU_BASE_URL", "ZHIPUAI_BASE_URL", "GLM_BASE_URL"],
+        "api_key_envs": ["LLM_API_KEY", "ZHIPU_API_KEY", "ZHIPUAI_API_KEY", "GLM_API_KEY"],
+        "model_envs": ["LLM_MODEL", "ZHIPU_MODEL", "ZHIPUAI_MODEL", "GLM_MODEL", "MODEL_NAME"],
+        "default_model": "glm-4-flash",
+    },
+    "siliconflow": {
+        "aliases": ["siliconflow", "silicon", "sf"],
+        "base_url": "https://api.siliconflow.cn/v1",
+        "base_url_envs": ["SILICONFLOW_BASE_URL"],
+        "api_key_envs": ["LLM_API_KEY", "SILICONFLOW_API_KEY"],
+        "model_envs": ["LLM_MODEL", "SILICONFLOW_MODEL", "MODEL_NAME"],
+        "default_model": "Qwen/Qwen2.5-7B-Instruct",
+    },
+    "openrouter": {
+        "aliases": ["openrouter"],
+        "base_url": "https://openrouter.ai/api/v1",
+        "base_url_envs": ["OPENROUTER_BASE_URL"],
+        "api_key_envs": ["LLM_API_KEY", "OPENROUTER_API_KEY"],
+        "model_envs": ["LLM_MODEL", "OPENROUTER_MODEL", "MODEL_NAME"],
+        "default_model": "openai/gpt-4o-mini",
+    },
+    "openai": {
+        "aliases": ["openai", "openai-official"],
+        "base_url": None,
+        "base_url_envs": ["OPENAI_BASE_URL"],
+        "api_key_envs": ["LLM_API_KEY", "OPENAI_API_KEY"],
+        "model_envs": ["LLM_MODEL", "OPENAI_MODEL", "MODEL_NAME"],
+        "default_model": "gpt-4o-mini",
+    },
+    "openai-compatible": {
+        "aliases": ["openai-compatible", "compatible", "custom", "gateway"],
+        "base_url": None,
+        "base_url_envs": [],
+        "api_key_envs": ["LLM_API_KEY", "OPENAI_API_KEY"],
+        "model_envs": ["LLM_MODEL", "MODEL_NAME"],
+        "default_model": "gpt-4o-mini",
+    },
+}
+
+LLM_PROVIDER_ALIASES = {
+    alias: provider
+    for provider, preset in LLM_PROVIDER_PRESETS.items()
+    for alias in preset["aliases"]
+}
+LLM_LOCAL_PROVIDERS = {"none", "off", "false", "local"}
+
+
+def _canonical_llm_provider(provider: str) -> str:
+    normalized = (provider or "").strip().lower().replace("_", "-")
+    if not normalized:
+        return "none"
+    return LLM_PROVIDER_ALIASES.get(normalized, normalized)
+
+
+def _llm_provider_preset(provider: str) -> dict[str, Any]:
+    return LLM_PROVIDER_PRESETS.get(_canonical_llm_provider(provider), LLM_PROVIDER_PRESETS["openai-compatible"])
+
+
 def _llm_provider() -> str:
     provider = os.getenv("LLM_PROVIDER")
     if provider is not None:
-        return provider.strip().lower() or "none"
+        return _canonical_llm_provider(provider)
     if _env_value("ARK_API_KEY", "VOLCENGINE_API_KEY"):
         return "volcengine"
+    if _env_value("DASHSCOPE_API_KEY", "QWEN_API_KEY"):
+        return "qwen"
+    if _env_value("MOONSHOT_API_KEY", "KIMI_API_KEY"):
+        return "moonshot"
+    if _env_value("ZHIPU_API_KEY", "ZHIPUAI_API_KEY", "GLM_API_KEY"):
+        return "zhipu"
+    if _env_value("SILICONFLOW_API_KEY"):
+        return "siliconflow"
+    if _env_value("OPENROUTER_API_KEY"):
+        return "openrouter"
     if _env_value("LLM_API_KEY", "OPENAI_API_KEY"):
         return "openai-compatible"
     if _env_value("DEEPSEEK_API_KEY"):
@@ -297,34 +401,24 @@ def _llm_base_url(provider: str) -> str | None:
     base_url = _env_value("LLM_BASE_URL")
     if base_url:
         return base_url
-    if provider == "deepseek":
-        return _env_value("DEEPSEEK_BASE_URL") or "https://api.deepseek.com/v1"
-    if provider in {"volcengine", "doubao", "ark"}:
-        return _env_value("ARK_BASE_URL", "VOLCENGINE_BASE_URL") or "https://ark.cn-beijing.volces.com/api/v3"
-    if provider in {"openai", "openai-official"}:
+    provider = _canonical_llm_provider(provider)
+    if provider in LLM_LOCAL_PROVIDERS:
         return None
-    return _env_value("DEEPSEEK_BASE_URL") or None
+    preset = _llm_provider_preset(provider)
+    provider_base_url = _env_value(*preset.get("base_url_envs", []))
+    if provider_base_url:
+        return provider_base_url
+    return preset.get("base_url")
 
 
 def _llm_model(provider: str) -> str:
-    model = _env_value("LLM_MODEL", "ARK_MODEL", "VOLCENGINE_MODEL", "DEEPSEEK_MODEL", "MODEL_NAME")
-    if model:
-        return model
-    if provider == "deepseek":
-        return "deepseek-v4-flash"
-    if provider in {"volcengine", "doubao", "ark"}:
-        return "doubao-pro-32k-240615"
-    return "gpt-4o-mini"
+    preset = _llm_provider_preset(provider)
+    return _env_value(*preset.get("model_envs", [])) or str(preset.get("default_model") or "gpt-4o-mini")
 
 
 def _llm_api_key(provider: str) -> str:
-    if provider == "deepseek":
-        return _env_value("LLM_API_KEY", "DEEPSEEK_API_KEY")
-    if provider in {"volcengine", "doubao", "ark"}:
-        return _env_value("LLM_API_KEY", "ARK_API_KEY", "VOLCENGINE_API_KEY")
-    if provider in {"openai", "openai-official"}:
-        return _env_value("LLM_API_KEY", "OPENAI_API_KEY")
-    return _env_value("LLM_API_KEY", "ARK_API_KEY", "VOLCENGINE_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY")
+    preset = _llm_provider_preset(provider)
+    return _env_value(*preset.get("api_key_envs", []))
 
 
 def _load_local_dotenv() -> None:
@@ -339,12 +433,13 @@ def _load_local_dotenv() -> None:
 def llm_config_summary() -> dict[str, Any]:
     _load_local_dotenv()
     provider = _llm_provider()
-    local_mode = provider in {"none", "off", "false", "local"}
+    local_mode = provider in LLM_LOCAL_PROVIDERS
     api_key = "" if local_mode else _llm_api_key(provider)
     return {
         "provider": provider,
         "model": "" if local_mode else _llm_model(provider),
         "base_url": "" if local_mode else (_llm_base_url(provider) or ""),
+        "supported_providers": sorted([*LLM_PROVIDER_PRESETS.keys(), "none"]),
         "api_key_configured": bool(api_key),
         "proxy_configured": bool(os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")),
         "local_fallback": local_mode or not bool(api_key),
@@ -404,7 +499,7 @@ def _make_llm() -> Any | None:
         _load_local_dotenv()
 
         provider = _llm_provider()
-        if provider in {"none", "off", "false", "local"}:
+        if provider in LLM_LOCAL_PROVIDERS:
             print("[llm] provider=none; using local fallback")
             _LLM_CACHE = None
             _LLM_CACHE_READY = True
