@@ -108,7 +108,8 @@ SKILL_MATCHER_PROMPT = """你是“技能匹配员”。你会收到 JD 拆解�
   ],
   "risk_level": "低/中/高",
   "suggestions": ["投递或面试建议"],
-  "interview_questions": ["围绕JD和候选人项目最可能被问的问题"]
+  "interview_questions": ["围绕JD和候选人项目最可能被问的问题"],
+  "opening_message": "发给 HR 的定制开场白"
 }
 
 评分规则：
@@ -116,7 +117,8 @@ SKILL_MATCHER_PROMPT = """你是“技能匹配员”。你会收到 JD 拆解�
 - 必备要求权重最高；加分项其次；软技能只做小幅修正。
 - risk_level 只能是“低”“中”“高”：75分及以上低，50-74中，50以下高。
 - matched_skills 必须引用候选人 skills.json 中的 level/evidence/project。
-- missing_skills 不要扩大缺口，只列 JD 关心但候选人证据不足的点。"""
+- missing_skills 不要扩大缺口，只列 JD 关心但候选人证据不足的点。
+- opening_message 用 opening_target 开头，结合 JD 具体要求和候选人证据写 80-140 字，必须包含 GitHub: tylygzl；不要写“我热爱”“学习能力强”“希望给机会”等空话；50 分以下不要说高度匹配。"""
 
 
 RESUME_SKILL_EXTRACTOR_PROMPT = """从以下简历提取技能列表，格式跟 skills.json 一样：must_have数组+familiar数组+projects数组，每项含skill/level/evidence。
@@ -763,6 +765,8 @@ def build_match_graph(llm: Any | None = None) -> Any:
                         {
                             "jd_analysis": _model_dump(jd_analysis),
                             "skills_profile": skills_profile,
+                            "opening_target": _opening_target({"role": jd_analysis.role}, state.get("jd_text", "")),
+                            "jd_excerpt_for_opening": _opening_jd_excerpt(state.get("jd_text", "")),
                         },
                         ensure_ascii=False,
                     ),
@@ -834,7 +838,23 @@ def _opening_target(report: dict[str, Any], jd_text: str = "") -> str:
     return role if role and role != "未知岗位" else "这个岗位"
 
 
-def generate_opening(report: dict[str, Any], skills_profile: dict[str, Any], jd_text: str = "") -> str:
+def _opening_jd_excerpt(jd_text: str, limit: int = 700) -> str:
+    lines: list[str] = []
+    total = 0
+    for line in jd_text.splitlines():
+        clean = re.sub(r"\s+", " ", line).strip(" \t-#*")
+        if not clean:
+            continue
+        if len(clean) > 160:
+            clean = clean[:160].rstrip(" ，。；;") + "..."
+        lines.append(clean)
+        total += len(clean)
+        if total >= limit:
+            break
+    return "\n".join(lines)[:limit]
+
+
+def _rule_opening(report: dict[str, Any], skills_profile: dict[str, Any], jd_text: str = "") -> str:
     target = _opening_target(report, jd_text)
     score = _coerce_score(report.get("match_score", 0))
     if score >= 75:
@@ -874,6 +894,45 @@ def generate_opening(report: dict[str, Any], skills_profile: dict[str, Any], jd_
     if score < 50:
         return f"{prefix}可沟通的交集主要是{skills_text}，证据是：{evidence_text}。相关代码和项目记录在 GitHub: tylygzl，我可以展开讲实现细节、指标和部署过程。"
     return f"{prefix}我独立搭建了{skills_text}相关项目，证据是：{evidence_text}。相关代码和项目记录在 GitHub: tylygzl，我可以展开讲实现细节、指标和部署过程。"
+
+
+def _sanitize_opening_message(message: Any, target: str, fallback: str, score: int) -> str:
+    clean = re.sub(r"\s+", " ", str(message or "")).strip(" 「」\"'")
+    if len(clean) < 20:
+        return fallback
+
+    empty_words = ["我热爱", "学习能力强", "希望给机会", "希望贵公司给机会"]
+    if any(empty_word in clean for empty_word in empty_words):
+        return fallback
+    clean = clean.replace("您好，", "").replace("您好,", "").strip()
+
+    if score < 50:
+        clean = clean.replace("高度匹配", "有部分工程交集").replace("非常匹配", "有部分交集")
+
+    if "tylygzl" not in clean:
+        clean = clean.rstrip(" ，。；;") + "。GitHub: tylygzl。"
+
+    if target and target != "这个岗位" and not clean.startswith(target):
+        clean = f"{target}的这个岗位，{clean}"
+
+    clean = re.sub(r"\s+", " ", clean).strip()
+    if len(clean) > 180:
+        if "GitHub: tylygzl" in clean:
+            prefix = clean.split("GitHub: tylygzl", 1)[0]
+            clean = prefix[:155].rstrip(" ，。；;") + "。GitHub: tylygzl。"
+        else:
+            clean = clean[:170].rstrip(" ，。；;") + "。"
+    return clean if len(clean) >= 20 else fallback
+
+
+def generate_opening(report: dict[str, Any], skills_profile: dict[str, Any], jd_text: str = "") -> str:
+    fallback = _rule_opening(report, skills_profile, jd_text)
+    target = _opening_target(report, jd_text)
+    score = _coerce_score(report.get("match_score", 0))
+    model_opening = report.get("opening_message", "")
+    if model_opening:
+        return _sanitize_opening_message(model_opening, target, fallback, score)
+    return fallback
 
 
 def match_jd(
