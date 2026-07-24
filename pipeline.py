@@ -299,6 +299,30 @@ def _llm_api_key(provider: str) -> str:
     return _env_value("LLM_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY")
 
 
+def _load_local_dotenv() -> None:
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(Path(__file__).with_name(".env"))
+    except Exception:
+        pass
+
+
+def llm_config_summary() -> dict[str, Any]:
+    _load_local_dotenv()
+    provider = _llm_provider()
+    local_mode = provider in {"none", "off", "false", "local"}
+    api_key = "" if local_mode else _llm_api_key(provider)
+    return {
+        "provider": provider,
+        "model": "" if local_mode else _llm_model(provider),
+        "base_url": "" if local_mode else (_llm_base_url(provider) or ""),
+        "api_key_configured": bool(api_key),
+        "proxy_configured": bool(os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY")),
+        "local_fallback": local_mode or not bool(api_key),
+    }
+
+
 def _make_llm() -> Any | None:
     global _LLM_CACHE_READY, _LLM_CACHE
     if _LLM_CACHE_READY:
@@ -308,12 +332,7 @@ def _make_llm() -> Any | None:
         if _LLM_CACHE_READY:
             return _LLM_CACHE
 
-        try:
-            from dotenv import load_dotenv
-
-            load_dotenv(Path(__file__).with_name(".env"))
-        except Exception:
-            pass
+        _load_local_dotenv()
 
         provider = _llm_provider()
         if provider in {"none", "off", "false", "local"}:

@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from pipeline import MatchReport, match_jd
+from pipeline import MatchReport, llm_config_summary, match_jd
 
 
 load_dotenv()
@@ -33,7 +33,12 @@ app.add_middleware(
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "service": "job-accelerator", "version": app.version}
+    return {
+        "ok": True,
+        "service": "job-accelerator",
+        "version": app.version,
+        "llm": llm_config_summary(),
+    }
 
 
 @app.post("/match", response_model=MatchReport)
