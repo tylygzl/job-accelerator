@@ -16,7 +16,8 @@
   const DETAIL_SCAN_TIMEOUT_MS = 5 * 1000;
   const DETAIL_SCAN_INTERVAL_MS = 200;
   const DETAIL_SCAN_COOLDOWN_MS = 1000;
-  const DETAIL_SCAN_BATCH_LIMIT = 10;
+  const DETAIL_SCAN_BATCH_LIMIT = 15;
+  const JOB_SCAN_LIMIT = 50;
   const DETAIL_READY_RE = /职位描述|岗位职责|工作职责|任职要求|岗位要求|任职资格|工作内容/;
   const JOB_CARD_SELECTOR = ".job-card-box,.job-card-wrapper";
   const DETAIL_TEXT_SELECTORS = [
@@ -128,6 +129,7 @@
 
     const jobs = [];
     document.querySelectorAll(JOB_CARD_SELECTOR).forEach((card, listIndex) => {
+      if (jobs.length >= JOB_SCAN_LIMIT) return;
       const cardText = inlineText(card);
       if (matchesExcludeKeyword(cardText, excludeKeywords)) return;
       const activeDays = extractHrActiveDays(card);
