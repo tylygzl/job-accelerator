@@ -89,6 +89,15 @@ function formatHealthError(error) {
   return `检测失败：${message || "未知错误"}`;
 }
 
+function clearPageSessionCache() {
+  return chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+    if (!tab?.id) return false;
+    return chrome.tabs.sendMessage(tab.id, { action: "clearSessionCache" })
+      .then(() => true)
+      .catch(() => false);
+  });
+}
+
 chrome.storage.local.get(["apiUrl", "resume_text", "min_score", "exclude_keywords", "daily_goal"], (data) => {
   apiUrlEl.value = data.apiUrl || DEFAULT_API;
   resumeTextEl.value = data.resume_text || "";
@@ -145,7 +154,9 @@ clearCacheBtn.addEventListener("click", () => {
 
     const cacheKeys = Object.keys(items || {}).filter((key) => key.startsWith(MATCH_CACHE_PREFIX));
     if (!cacheKeys.length) {
-      statusEl.textContent = "没有可清理的分析缓存";
+      clearPageSessionCache().then((clearedPage) => {
+        statusEl.textContent = clearedPage ? "已清空本页会话缓存" : "没有可清理的分析缓存";
+      });
       return;
     }
 
@@ -154,7 +165,9 @@ clearCacheBtn.addEventListener("click", () => {
         statusEl.textContent = `清理缓存失败：${chrome.runtime.lastError.message}`;
         return;
       }
-      statusEl.textContent = `已清空 ${cacheKeys.length} 条分析缓存`;
+      clearPageSessionCache().then((clearedPage) => {
+        statusEl.textContent = `已清空 ${cacheKeys.length} 条分析缓存${clearedPage ? "，并清空本页会话缓存" : ""}`;
+      });
     });
   });
 });

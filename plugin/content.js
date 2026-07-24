@@ -23,6 +23,7 @@
   const SEARCH_SCROLL_STEP_MS = 160;
   const SEARCH_SCROLL_SETTLE_MS = 700;
   const SESSION_JOBS_KEY = "job_accelerator_session_jobs";
+  const SESSION_JOBS_VERSION = MATCH_CACHE_PREFIX;
   const SESSION_JOBS_TTL_MS = 4 * 60 * 60 * 1000;
   const DETAIL_READY_RE = /职位描述|岗位职责|工作职责|任职要求|岗位要求|任职资格|工作内容/;
   const JOB_CARD_SELECTOR = ".job-card-box,.job-card-wrapper";
@@ -61,7 +62,29 @@
       visible ? hide() : show();
       sendResponse({ ok: true });
     }
+    if (request.action === "clearSessionCache") {
+      clearSessionJobs();
+      sendResponse({ ok: true });
+    }
     return true;
+  });
+
+  chrome.storage?.onChanged?.addListener((changes, areaName) => {
+    if (areaName !== "local") return;
+    let shouldRefresh = false;
+    if (changes.min_score) {
+      activeMinScore = normalizeMinScore(changes.min_score.newValue);
+      shouldRefresh = true;
+    }
+    if (changes.daily_goal) {
+      activeDailyGoal = normalizeDailyGoal(changes.daily_goal.newValue);
+      shouldRefresh = true;
+    }
+    if (shouldRefresh && panel) {
+      const jobs = latestJobs.length ? latestJobs : sessionJobList();
+      if (jobs.length) render(jobs);
+      else refreshStats([]);
+    }
   });
 
   async function show() {
@@ -174,6 +197,10 @@
       const raw = sessionStorage.getItem(SESSION_JOBS_KEY);
       if (!raw) return new Map();
       const data = JSON.parse(raw);
+      if (data?.version !== SESSION_JOBS_VERSION) {
+        sessionStorage.removeItem(SESSION_JOBS_KEY);
+        return new Map();
+      }
       const sameSearch = data?.signature === searchSignature();
       const fresh = Date.now() - Number(data?.savedAt || 0) < SESSION_JOBS_TTL_MS;
       if (!sameSearch || !fresh || !Array.isArray(data.jobs)) return new Map();
@@ -187,11 +214,27 @@
     try {
       const jobs = sessionJobList().slice(-JOB_SCAN_LIMIT);
       sessionStorage.setItem(SESSION_JOBS_KEY, JSON.stringify({
+        version: SESSION_JOBS_VERSION,
         signature: searchSignature(),
         savedAt: Date.now(),
         jobs,
       }));
     } catch (_) {}
+  }
+
+  function clearSessionJobs() {
+    try {
+      sessionStorage.removeItem(SESSION_JOBS_KEY);
+    } catch (_) {}
+    sessionJobs = new Map();
+    latestJobs = [];
+    renderedJobs.clear();
+    scanSummary = emptyScanSummary();
+    if (!panel) return;
+    renderScanSummary("已清空本页会话结果。");
+    const results = panel.querySelector("#job-accelerator-results");
+    if (results) results.innerHTML = '<div class="empty">已清空本页会话结果，重新打开面板可重新分析</div>';
+    refreshStats([]);
   }
 
   function searchSignature() {
@@ -1161,7 +1204,7 @@
       if (status === "skip") counts.skip += 1;
     });
 
-    stat.textContent = `已分析 ${counts.analyzed} 个 | 达标 ${counts.ready} | 今日目标 ${activeDailyGoal || "未设"} | 已投 ${counts.done} | 跳过 ${counts.skip}`;
+    stat.textContent = `已分析 ${counts.analyzed} 个 | ≥${activeMinScore}分 ${counts.ready} | 今日目标 ${activeDailyGoal || "未设"} | 已投 ${counts.done} | 跳过 ${counts.skip}`;
   }
 
   function scoreOf(job) {
