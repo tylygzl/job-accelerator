@@ -244,6 +244,61 @@ def load_skills_profile(path: str | Path | None = None) -> dict[str, Any]:
         return json.load(f)
 
 
+def _env_value(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value.strip()
+    return ""
+
+
+def _masked_secret(value: str) -> str:
+    if not value:
+        return "<empty>"
+    if len(value) <= 8:
+        return value[:2] + "..." + value[-2:]
+    return value[:4] + "..." + value[-4:]
+
+
+def _llm_provider() -> str:
+    provider = os.getenv("LLM_PROVIDER")
+    if provider is not None:
+        return provider.strip().lower() or "none"
+    if _env_value("LLM_API_KEY", "OPENAI_API_KEY"):
+        return "openai-compatible"
+    if _env_value("DEEPSEEK_API_KEY"):
+        return "deepseek"
+    return "none"
+
+
+def _llm_base_url(provider: str) -> str | None:
+    base_url = _env_value("LLM_BASE_URL")
+    if base_url:
+        return base_url
+    if provider == "deepseek":
+        return _env_value("DEEPSEEK_BASE_URL") or "https://api.deepseek.com/v1"
+    if provider in {"openai", "openai-official"}:
+        return None
+    return _env_value("DEEPSEEK_BASE_URL") or None
+
+
+def _llm_model(provider: str) -> str:
+    model = _env_value("LLM_MODEL", "DEEPSEEK_MODEL", "MODEL_NAME")
+    if model:
+        return model
+    if provider == "deepseek":
+        return "deepseek-v4-flash"
+    return "gpt-4o-mini"
+
+
+def _llm_api_key(provider: str) -> str:
+    if provider == "deepseek":
+        return _env_value("LLM_API_KEY", "DEEPSEEK_API_KEY")
+    if provider in {"openai", "openai-official"}:
+        return _env_value("LLM_API_KEY", "OPENAI_API_KEY")
+    return _env_value("LLM_API_KEY", "DEEPSEEK_API_KEY", "OPENAI_API_KEY")
+
+
 def _make_llm() -> Any | None:
     global _LLM_CACHE_READY, _LLM_CACHE
     if _LLM_CACHE_READY:
@@ -260,8 +315,20 @@ def _make_llm() -> Any | None:
         except Exception:
             pass
 
-        api_key = os.getenv("DEEPSEEK_API_KEY")
-        print(f"[llm] DEEPSEEK_API_KEY={api_key[:4]}...{api_key[-4:]}" if api_key else "[llm] DEEPSEEK_API_KEY=<empty>")
+        provider = _llm_provider()
+        if provider in {"none", "off", "false", "local"}:
+            print("[llm] provider=none; using local fallback")
+            _LLM_CACHE = None
+            _LLM_CACHE_READY = True
+            return None
+
+        api_key = _llm_api_key(provider)
+        model_name = _llm_model(provider)
+        base_url = _llm_base_url(provider)
+        print(
+            f"[llm] provider={provider} model={model_name} "
+            f"base_url={base_url or '<provider-default>'} api_key={_masked_secret(api_key)}"
+        )
         if not api_key:
             _LLM_CACHE = None
             _LLM_CACHE_READY = True
@@ -270,9 +337,9 @@ def _make_llm() -> Any | None:
         proxy = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or ""
 
         model = ChatOpenAI(
-            model=os.getenv("DEEPSEEK_MODEL") or os.getenv("MODEL_NAME", "deepseek-v4-pro"),
+            model=model_name,
             api_key=api_key,
-            base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+            base_url=base_url,
             temperature=0,
             timeout=float(os.getenv("JOB_ACCELERATOR_LLM_TIMEOUT", "45")),
             openai_proxy=proxy if proxy else None,

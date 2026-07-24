@@ -3,7 +3,7 @@
 Default mode avoids real LLM calls so it is cheap and fast:
     python eval_accuracy.py
 
-Use --llm when you want to test the real DeepSeek chain:
+Use --llm when you want to test the configured LLM chain:
     python eval_accuracy.py --llm
 """
 
@@ -117,7 +117,7 @@ def run_cases(cases: list[dict[str, Any]], resume_text: str, use_llm: bool, jobs
 
 
 def print_results(results: list[dict[str, Any]], use_llm: bool) -> None:
-    mode = "DeepSeek real chain" if use_llm else "local fallback smoke"
+    mode = "configured LLM chain" if use_llm else "local fallback smoke"
     print(f"\nJob Accelerator eval ({mode})")
     print("-" * 98)
     print(f"{'case':<24} {'score':<7} {'expected':<10} {'risk':<6} {'opening':<8} {'time':<8} result")
