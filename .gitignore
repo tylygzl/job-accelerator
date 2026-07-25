@@ -2,6 +2,7 @@
 .env
 search_results.json
 shixiseng_profile/
+release/
 .venv/
 __pycache__/
 *.pyc
