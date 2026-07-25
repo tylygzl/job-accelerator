@@ -1645,7 +1645,7 @@ def match_jd(
     if not jd_text:
         raise ValueError("jd_text 不能为空")
     profile = skills_profile or load_skills_profile(skills_path)
-    active_llm = llm if llm is not None else _make_llm()
+    active_llm = None if llm is False else (llm if llm is not None else _make_llm())
     resume_text = (resume_text or "").strip()
     if resume_text:
         try:

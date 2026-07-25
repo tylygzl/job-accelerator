@@ -38,6 +38,12 @@
     ".job-detail-section",
     ".detail-content",
     ".job-detail-container",
+    "[class*='job-sec']",
+    "[class*='job-desc']",
+    "[class*='jobDesc']",
+    "[class*='description']",
+    "[class*='require']",
+    "[class*='responsib']",
   ];
   let panel = null;
   let visible = false;
@@ -713,7 +719,11 @@
     const cacheKey = cacheKeyFor(job);
     const dataAttrs = `data-list-index="${esc(job.listIndex ?? "")}" data-url="${esc(job.url || "")}" data-key="${esc(statusKey)}" data-cache-key="${esc(cacheKey)}"`;
     if (job.error) {
-      return `<div class="card low" ${dataAttrs}><div class="title">请求失败 | ${esc(job.title)}</div><div class="meta">${esc(job.error)}</div></div>`;
+      return `<div class="card low" ${dataAttrs}>
+        <div class="title">请求失败 | ${esc(job.title)}</div>
+        <div class="meta">${esc(job.error)}</div>
+        <div class="chat-info">${esc(analyzeErrorHint(job))}</div>
+      </div>`;
     }
     const match = job.match || {};
     const score = scoreOf(job);
@@ -1371,7 +1381,7 @@
       const merged = uniqueParagraphs(chunks.join("\n\n"));
       if (merged.length >= 40) return merged;
     }
-    return "";
+    return extractReadyTextBlock(root);
   }
 
   function matchingNodes(root, selector) {
@@ -1379,6 +1389,23 @@
     if (root instanceof Element && root.matches(selector)) nodes.push(root);
     nodes.push(...root.querySelectorAll(selector));
     return nodes;
+  }
+
+  function extractReadyTextBlock(root) {
+    const selectors = ["section", "article", "main", "[class*='detail']", "[class*='job']", "[class*='desc']", "[class*='require']"];
+    const candidates = uniqueElements(selectors.flatMap((selector) => Array.from(root.querySelectorAll(selector))))
+      .filter(isVisible)
+      .filter((node) => !node.closest(`#${CHAT_HELPER_ID},#job-accelerator-panel`))
+      .filter((node) => !(root === document && node.closest(JOB_CARD_SELECTOR)))
+      .map((node) => ({ node, value: paragraphText(node) }))
+      .filter((item) => item.value.length >= 40 && item.value.length <= 3000)
+      .filter((item) => DETAIL_READY_RE.test(item.value))
+      .sort((a, b) => {
+        const aDetail = /detail|desc|require|job/i.test(a.node.className || "") ? 1 : 0;
+        const bDetail = /detail|desc|require|job/i.test(b.node.className || "") ? 1 : 0;
+        return bDetail - aDetail || b.value.length - a.value.length;
+      });
+    return uniqueParagraphs(candidates[0]?.value || "");
   }
 
   function paragraphText(node) {
@@ -1508,10 +1535,10 @@
       return `请求超时：后端或 LLM 超过 ${REQUEST_TIMEOUT_MS / 1000}s 未返回。这条会在下次刷新或继续扫描时重试。`;
     }
     if (/Failed to fetch|NetworkError|Load failed|fetch/i.test(message)) {
-      return `后端未连接：请先运行 python server.py，再刷新插件。当前 API：${api}`;
+      return `后端未连接：请先双击 start_server.bat 或运行 python server.py，再刷新插件。当前 API：${api}`;
     }
     if (/HTTP 400/.test(message)) {
-      return "参数错误：没有读到有效 JD，请刷新页面或点开岗位详情后重试。";
+      return "没有读到有效 JD：可能是右侧详情还没加载，或 BOSS 页面结构变化。请点开岗位详情后重试。";
     }
     if (/HTTP 500/.test(message)) {
       return "后端匹配失败：请查看 server.py 终端报错，常见原因是 API key、代理或 LLM 超时。";
@@ -1523,6 +1550,14 @@
       return `后端返回异常：${message}。请查看 server.py 终端报错。`;
     }
     return `请求失败：${message || "未知错误"}。请确认后端服务和网络代理正常。`;
+  }
+
+  function analyzeErrorHint(job) {
+    if (!job.retryable) return "这类错误通常需要先处理配置或页面状态，再刷新插件。";
+    if (/后端未连接/.test(job.error || "")) return "启动后端后，点击“继续扫描”或刷新插件即可重试。";
+    if (/没有读到有效 JD/.test(job.error || "")) return "先在左侧点一下该岗位，让右侧详情加载出来，再继续扫描。";
+    if (/请求超时|LLM|后端匹配失败/.test(job.error || "")) return "这条会保留在面板里，等网络或模型恢复后继续扫描会重试。";
+    return "这是可重试错误，稍后点击“继续扫描”会重新分析。";
   }
 
   function isRetryableAnalyzeError(error) {
