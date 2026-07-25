@@ -4,6 +4,15 @@
 
 普通 Windows 用户试用可以先看 `朋友使用说明.txt`，开发和二次修改再看下面的完整说明。
 
+## 文档索引
+
+- [免责声明](docs/disclaimer.md)
+- [安装和运行排错](docs/troubleshooting.md)
+- [准确率评估说明](docs/evaluation.md)
+- [BOSS 页面稳定性实测清单](docs/stability_checklist.md)
+- [截图和 GIF 演示清单](docs/demo.md)
+- [旧入口说明](docs/legacy_entrypoints.md)
+
 ## 当前主流程
 
 ```mermaid
@@ -41,7 +50,22 @@ skills.json       无简历时的默认技能画像
 
 ## 安装依赖
 
-推荐使用 `uv`：
+Windows 普通用户优先使用：
+
+```text
+start_server.bat
+```
+
+脚本会自动创建 `.venv` 并安装 `requirements-backend.txt` 里的后端最小依赖。这个路径只服务 Chrome 插件主流程。
+
+开发者也可以手动安装后端依赖：
+
+```bash
+python -m venv .venv
+.venv/Scripts/python -m pip install -r requirements-backend.txt
+```
+
+如果你要二次开发完整仓库，可以使用 `uv`：
 
 ```bash
 git clone <repo-url>
@@ -49,7 +73,11 @@ cd job-accelerator
 uv sync
 ```
 
-也可以在自己的 Python 环境中安装 `pyproject.toml` 里的依赖。
+当前后端主线按 Python 3.10+ 验证。旧 Streamlit/Deep Agents/Playwright 实验入口不是普通用户路径，如果要运行这些旧入口，再安装可选依赖：
+
+```bash
+uv sync --extra legacy
+```
 
 ## 配置模型
 
@@ -173,6 +201,8 @@ curl http://127.0.0.1:8000/health
 
 如果页面出现反爬刷新或岗位列表异常，先降低单次扫描数量，等待页面稳定后继续扫描。
 
+安装失败、后端连不上、LLM 超时、读不到 JD 等问题见 [安装和运行排错](docs/troubleshooting.md)。
+
 ## 隐私
 
 - `.env` 已被 `.gitignore` 忽略，不要提交真实 API Key。
@@ -181,12 +211,25 @@ curl http://127.0.0.1:8000/health
 - 只有达到阈值的高潜岗位才会把 JD 摘要、匹配技能和精简简历证据发送给你配置的 LLM。
 - 如果 `LLM_PROVIDER=none`，则不会调用外部模型，只使用本地兜底。
 
+## 免责声明
+
+本项目不是 BOSS 直聘官方工具，也不承诺提高投递成功率。它只做辅助筛选、开场白草稿和半自动填入，最终发送动作由用户自己确认。详细说明见 [免责声明](docs/disclaimer.md)。
+
 ## 已知限制
 
 - BOSS 直聘页面结构和反爬策略可能变化，插件需要持续维护 DOM 选择器和扫描节奏。
 - 自动填开场白后仍需要用户手动确认发送。
 - 开场白质量取决于简历证据、JD 质量和所选模型。
 - 当前缓存是本地缓存和后端内存缓存，不是跨设备账号系统。
+- 真实截图/GIF 需要用打码后的页面素材补充，建议见 [截图和 GIF 演示清单](docs/demo.md)。
+
+## 旧入口
+
+仓库里保留了早期 Streamlit、Deep Agents 和实习僧相关实验文件，用于展示项目演进，不是当前 Chrome 插件主流程。说明见 [旧入口说明](docs/legacy_entrypoints.md)。
+
+## License
+
+MIT License，见 [LICENSE](LICENSE)。
 
 ## 面试讲法
 
