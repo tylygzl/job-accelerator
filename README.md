@@ -1,6 +1,6 @@
 # 求职加速器
 
-一个面向 BOSS 直聘搜索页的半自动求职助手：用户粘贴简历，插件抓取岗位 JD，本地快速筛选匹配度，只对高潜岗位调用 LLM 生成定制开场白，最后由用户手动确认发送。
+一个面向 BOSS 直聘的半自动求职效率工具：用户上传 PDF 或粘贴简历后，插件在岗位页完成 JD 匹配和达标岗位沟通；在消息页发现 HR 回复后，用户可以让插件生成并填入回复草稿，再由用户检查和发送。
 
 普通 Windows 用户试用可以先看 `朋友使用说明.txt`，开发和二次修改再看下面的完整说明。
 
@@ -8,45 +8,75 @@
 
 - [免责声明](docs/disclaimer.md)
 - [安装和运行排错](docs/troubleshooting.md)
+- [阿里云部署说明](docs/cloud_deploy.md)
+- [在线 Demo 说明](docs/online_demo.md)
+- [后端 API 结构](docs/backend_api.md)
 - [准确率评估说明](docs/evaluation.md)
+- [Trace 日志 / 调用记录](docs/trace_logging.md)
+- [简历与面试准备](docs/interview_prep.md)
 - [BOSS 页面稳定性实测清单](docs/stability_checklist.md)
 - [截图和 GIF 演示清单](docs/demo.md)
 - [旧入口说明](docs/legacy_entrypoints.md)
 
+## 在线 Demo
+
+- 后端健康检查：`http://121.196.231.160/job-accelerator/health`
+- 完整插件体验：需要 Chrome 扩展、BOSS 登录态和私有访问令牌，不做公开免登录 Demo。
+- 朋友试用包：由 `scripts/build_friend_plugin.ps1` 生成 `release/plugin-cloud.zip`，只适合小范围发给可信用户测试。
+
+在线 Demo 的详细边界见 [在线 Demo 说明](docs/online_demo.md)。真实 BOSS 页面截图和 GIF 需要打码后放到 `docs/assets/`，清单见 [截图和 GIF 演示清单](docs/demo.md)。
+
+## 项目证据
+
+![云端后端健康检查](docs/assets/health-check-public.png)
+
+![固定 JD 回归评测](docs/assets/eval-summary-public.png)
+
+![脱敏 Trace 调用记录](docs/assets/trace-log-public.png)
+
 ## 当前主流程
 
 ```mermaid
-flowchart LR
-    A["粘贴简历"] --> B["BOSS 搜索页筛选岗位"]
-    B --> C["插件抓取当前可见 JD"]
-    C --> D["本地快筛匹配度"]
+flowchart TD
+    A["上传 PDF 或粘贴简历"] --> B["用户先在 BOSS 设置筛选条件"]
+    B --> C["插件逐条读取 JD"]
+    C --> D["快速匹配或智能匹配"]
     D --> E{"分数 >= 阈值?"}
     E -- "否" --> F["展示低匹配原因"]
-    E -- "是" --> G["LLM 生成开场白"]
-    G --> H["用户点击去沟通"]
-    H --> I["自动填入开场白"]
-    I --> J["用户手动确认发送"]
+    E -- "是" --> G["自动点立即沟通"]
+    G --> H["自动点留在此页"]
+    H --> I["继续下一条"]
+    J["用户打开 BOSS 消息页"] --> K["检查 HR 回复"]
+    K --> L["加入待回复队列"]
+    L --> M["用户点击处理回复"]
+    M --> N["校验当前会话并生成草稿"]
+    N --> O["只填输入框"]
+    O --> P["用户确认后手动发送"]
 ```
 
-这个项目不是全自动群发工具。它的边界是：自动筛选、自动生成、自动填入，最终发送动作由用户确认。
+这个项目的第一版重点是减少重复筛岗位、重复点沟通和重复组织基础回复的时间。HR 回复助手不会自动发送，证据不足、高风险问题或会话不一致时会停止填入并提示用户接管。
 
 ## 架构
 
 ```text
 plugin/
-  popup.html/js   粘贴简历、匹配阈值、排除关键词、保存配置
-  content.js      抓岗位卡片和详情、调 /match、展示结果、统计、导出 CSV、去沟通填话术
+  popup.html/js   PDF/文本简历、投递模式、阈值、待回复队列
+  content.js      job/message/chat 三种页面模式、DOM 操作、task lock、状态面板
+  background.js   代表 content script 请求云端后端，避免 HTTPS 页面直连 HTTP 被拦截
+  config.js       源码版使用本地后端；朋友包打包时替换云端地址和访问令牌
 
-server.py         FastAPI 服务，提供 /health 和 /match
-pipeline.py       简历画像、本地快筛、LLM 开场白、评分兜底
+server.py         FastAPI 服务，提供 /health、/match、/resume/parse、/chat/reply
+pipeline.py       简历画像、本地快筛、智能兜底、HR 回复意图与证据护栏
 skills.json       无简历时的默认技能画像
 ```
 
 核心策略是两阶段分析：
 
 1. 本地规则先快速判断 JD 和简历画像的匹配度。
-2. 只有高潜岗位才调用 LLM 写开场白，避免每个岗位都排队超时。
+2. 快速投递完全不依赖 LLM；智能投递只把模型当增强能力，超时或繁忙时回到本地结果。
 3. 简历会先提取成 skills_profile 并缓存在后端内存里，同一份简历后续复用，不反复发送全文。
+4. HR 回复助手先校验会话和最后发言角色，再按风险与证据决定是否填草稿；它不会点击发送。
+5. 云端后端为快速匹配、智能匹配、PDF 解析和 HR 回复设置独立并发门控，聊天模型不会拖住快速海投。
 
 ## 安装依赖
 
@@ -131,12 +161,27 @@ RESUME_EXTRACT_ATTEMPTS=1
 LLM_JD_DECOMPOSER=false
 ```
 
+云端朋友试用版还建议配置：
+
+```env
+JOB_ACCELERATOR_FAST_CONCURRENCY=8
+JOB_ACCELERATOR_SMART_CONCURRENCY=1
+JOB_ACCELERATOR_CHAT_REPLY_CONCURRENCY=2
+JOB_ACCELERATOR_PDF_CONCURRENCY=2
+JOB_ACCELERATOR_RATE_LIMIT_PER_MINUTE=120
+JOB_ACCELERATOR_SMART_LLM_TIMEOUT=5
+JOB_ACCELERATOR_CHAT_REPLY_SLOW_TIMEOUT=4
+JOB_ACCELERATOR_CHAT_REPLY_LLM=false
+```
+
 含义：
 
 - `LLM_MIN_SCORE=75`：本地快筛 75 分以上才调用 LLM。
 - `LLM_OPENING=true`：让 LLM 只负责高潜岗位的开场白。
 - `LLM_MATCHER=false`：匹配分默认由本地规则算，避免每条岗位都慢。
 - `LLM_RESUME_EXTRACTOR=auto`：有模型时首次提取简历画像，失败就本地兜底。
+- `JOB_ACCELERATOR_SMART_CONCURRENCY=1`：智能模式限并发，忙时走快速兜底，不拖慢海投。
+- `JOB_ACCELERATOR_CHAT_REPLY_LLM=false`：默认使用快速模板和本地证据护栏；设为 `true` 后，技术/项目类回复可尝试模型增强，失败仍会兜底。
 
 旧的 `DEEPSEEK_*` 环境变量仍兼容，但新用户建议使用 `LLM_*`。
 
@@ -174,12 +219,18 @@ curl http://127.0.0.1:8000/health
 
 ```json
 {
-  "provider": "deepseek",
-  "api_key_configured": true,
-  "two_stage": true,
-  "llm_min_score": 75,
-  "llm_resume_extractor": true,
-  "llm_opening": true
+  "success": true,
+  "data": {
+    "ok": true,
+    "llm": {
+      "provider": "deepseek",
+      "api_key_configured": true,
+      "two_stage": true,
+      "llm_min_score": 75,
+      "llm_resume_extractor": true,
+      "llm_opening": true
+    }
+  }
 }
 ```
 
@@ -190,14 +241,17 @@ curl http://127.0.0.1:8000/health
 3. 点击「加载已解压的扩展程序」
 4. 选择项目里的 `plugin/` 目录
 5. 打开 BOSS 直聘搜索页
-6. 点击插件图标，粘贴简历，保存配置
-7. 点击开始分析
+6. 点击插件图标，上传 PDF 或粘贴简历
+7. 选择「快速投递」或「智能投递」
+8. 在 BOSS 消息页可以点击「检查 HR 回复」，再手动选择需要处理的会话
 
 ## 使用建议
 
 先在 BOSS 直聘页面里设置好城市、岗位、薪资、经验、学历等筛选条件，再启动插件分析。
 
-插件会保留低匹配岗位，因为真实求职场景里需要看到“不适合”的原因。匹配阈值主要用于判断哪些岗位值得生成开场白和进入沟通动作。
+插件会保留低匹配岗位，因为真实求职场景里需要看到“不适合”的原因。匹配阈值用于判断哪些岗位可以进入自动沟通动作。
+
+HR 回复助手只填草稿。薪资、到岗、驻场/远程、敏感信息、证据不足的技术问题会提示用户接管；当前会话与队列记录不一致时不会请求后端，也不会填入。
 
 如果页面出现反爬刷新或岗位列表异常，先降低单次扫描数量，等待页面稳定后继续扫描。
 
@@ -208,18 +262,19 @@ curl http://127.0.0.1:8000/health
 - `.env` 已被 `.gitignore` 忽略，不要提交真实 API Key。
 - 简历文本保存在 Chrome 本地存储中，用于插件调用本地后端。
 - 后端会把简历提取成技能画像，默认只缓存在内存里，重启服务后清空。
-- 只有达到阈值的高潜岗位才会把 JD 摘要、匹配技能和精简简历证据发送给你配置的 LLM。
+- 智能投递或技术类 HR 回复启用模型增强时，必要的 JD、简历证据和聊天上下文可能会发送给配置的模型服务商。
 - 如果 `LLM_PROVIDER=none`，则不会调用外部模型，只使用本地兜底。
+- Trace 默认只记录长度、hash 和结构化指标，不记录完整简历、JD、聊天正文或生成草稿。
 
 ## 免责声明
 
-本项目不是 BOSS 直聘官方工具，也不承诺提高投递成功率。它只做辅助筛选、开场白草稿和半自动填入，最终发送动作由用户自己确认。详细说明见 [免责声明](docs/disclaimer.md)。
+本项目不是 BOSS 直聘官方工具，也不承诺提高投递成功率。当前快速海投会在达标岗位上自动点击「立即沟通」，并尝试在 BOSS 弹窗中选择「留在此页」继续处理下一条；使用者需要自行设置筛选条件、投递节奏和账号风险边界。详细说明见 [免责声明](docs/disclaimer.md)。
 
 ## 已知限制
 
 - BOSS 直聘页面结构和反爬策略可能变化，插件需要持续维护 DOM 选择器和扫描节奏。
-- 自动填开场白后仍需要用户手动确认发送。
-- 开场白质量取决于简历证据、JD 质量和所选模型。
+- 自动沟通依赖 BOSS 当前弹窗文案和页面结构；如果识别不到「留在此页」，插件应暂停并提示手动处理。
+- HR 回复助手依赖 BOSS 当前聊天 DOM；会话证据不明确时会保守停止，需要用户手动处理。
 - 当前缓存是本地缓存和后端内存缓存，不是跨设备账号系统。
 - 真实截图/GIF 需要用打码后的页面素材补充，建议见 [截图和 GIF 演示清单](docs/demo.md)。
 
@@ -233,6 +288,8 @@ MIT License，见 [LICENSE](LICENSE)。
 
 ## 面试讲法
 
+更完整的简历描述、1 分钟讲稿和 10 个常见追问见 [简历与面试准备](docs/interview_prep.md)。
+
 这个项目可以概括为：
 
-> 我做了一个半自动求职助手，把重复的岗位筛选、JD 阅读和开场白编写拆成 Chrome 插件、FastAPI 后端和匹配流水线三层。为了避免每个岗位都调用大模型导致超时，我设计了两阶段分析：先本地快筛，再只对高潜岗位调用 LLM 生成开场白，同时把简历提取成可复用的技能画像，减少 token 和等待时间。
+> 我做了一个面向 BOSS 的半自动求职助手，把岗位扫描、JD 匹配、达标沟通和 HR 回复草稿整合到同一个 Chrome 插件。快速投递完全走本地规则，智能能力超时会兜底；消息页通过 task lock、会话证据校验和风险策略保证只填正确会话的草稿、不自动发送。后端使用 FastAPI 提供匹配、PDF 解析和回复接口，并用独立并发门控、脱敏 Trace 和固定样本回归提升可维护性。

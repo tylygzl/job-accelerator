@@ -3,6 +3,10 @@
 search_results.json
 shixiseng_profile/
 release/
+output/
+tmp/
+logs/
+.deploy_tools/
 .venv/
 __pycache__/
 *.pyc

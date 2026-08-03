@@ -1,18 +1,29 @@
 {
   "manifest_version": 3,
   "name": "求职加速器",
-  "version": "0.2.0",
-  "description": "BOSS 直聘岗位 JD 匹配分析助手",
+  "version": "0.2.3",
+  "description": "BOSS 直聘岗位海投、筛选与沟通草稿助手",
   "permissions": ["activeTab", "storage", "scripting"],
-  "host_permissions": ["*://*.zhipin.com/*", "http://localhost:*/*", "http://127.0.0.1:*/*"],
+  "host_permissions": [
+    "*://*.zhipin.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "https://tengyuanlinye.cn/*",
+    "http://121.196.231.160/*",
+    "https://121.196.231.160/*",
+    "http://121.196.231.160:*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
-    "default_title": "分析当前岗位",
+    "default_title": "打开海投助手",
     "default_popup": "popup.html"
   },
   "content_scripts": [
     {
       "matches": ["*://*.zhipin.com/*"],
-      "js": ["content.js"],
+      "js": ["config.js", "content.js"],
       "run_at": "document_idle"
     }
   ]

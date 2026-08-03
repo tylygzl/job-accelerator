@@ -4,57 +4,136 @@
   <meta charset="UTF-8">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { width: 360px; padding: 16px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #151820; color: #e6e8ee; }
-    h2 { font-size: 16px; margin-bottom: 12px; color: #fff; }
+    body { width: 380px; padding: 16px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #151820; color: #e6e8ee; }
+    h2 { font-size: 17px; margin-bottom: 4px; color: #fff; }
+    .title-bar { margin: -4px -4px 4px; padding: 4px; user-select: none; -webkit-user-select: none; cursor: pointer; }
+    .title-bar h2 { margin-bottom: 0; pointer-events: none; }
     label { display: block; font-size: 12px; color: #aeb6c8; margin-bottom: 6px; }
     input { width: 100%; padding: 8px 10px; font-size: 12px; background: #202636; border: 1px solid #384255; border-radius: 6px; color: #e6e8ee; }
-    textarea { width: 100%; min-height: 120px; resize: vertical; padding: 8px 10px; font-size: 12px; line-height: 1.5; background: #202636; border: 1px solid #384255; border-radius: 6px; color: #e6e8ee; font-family: inherit; }
+    input[type="checkbox"] { width: auto; }
+    textarea { width: 100%; min-height: 118px; resize: vertical; padding: 8px 10px; font-size: 12px; line-height: 1.5; background: #202636; border: 1px solid #384255; border-radius: 6px; color: #e6e8ee; font-family: inherit; }
     textarea::placeholder { color: #6f788a; }
     input[type="range"] { padding: 0; accent-color: #2f80ed; }
-    .section { margin-top: 12px; }
-    .hint { margin: 10px 0 14px; font-size: 12px; line-height: 1.5; color: #aeb6c8; }
+    details { margin-top: 12px; }
+    summary { cursor: pointer; color: #8fb8ff; font-size: 12px; list-style-position: inside; }
+    .subtitle { margin-bottom: 14px; font-size: 12px; line-height: 1.5; color: #aeb6c8; }
+    .step { margin-top: 12px; padding: 12px; border: 1px solid #384255; border-radius: 8px; background: #1d2331; }
+    .step-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 13px; font-weight: 700; color: #fff; }
+    .step-index { color: #8fb8ff; font-size: 12px; font-weight: 700; }
+    .hint { margin-top: 8px; font-size: 12px; line-height: 1.45; color: #aeb6c8; }
     .btn { width: 100%; padding: 10px; border: 0; border-radius: 7px; font-size: 14px; font-weight: 700; cursor: pointer; background: #2f80ed; color: #fff; }
     .btn + .btn { margin-top: 8px; }
     .btn:hover { background: #2369c9; }
     .btn:disabled { opacity: .55; cursor: wait; }
     .btn.secondary { background: #202636; border: 1px solid #384255; color: #d8deea; }
     .btn.secondary:hover { background: #283145; }
+    .btn.fast { background: #2f80ed; }
+    .btn.smart { background: #20a66a; }
+    .file-row { display: flex; gap: 8px; align-items: center; }
+    .file-row input { flex: 1; min-width: 0; padding: 7px; }
+    .file-row .btn { width: auto; min-width: 88px; padding: 8px 10px; font-size: 12px; }
     .resume-state { margin-top: 8px; font-size: 12px; color: #8fd19e; }
     .resume-state.empty { color: #8f98aa; }
-    .score-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+    .target-row { display: grid; grid-template-columns: 118px 1fr; gap: 10px; align-items: end; }
+    .score-row { display: flex; justify-content: space-between; align-items: center; margin: 10px 0 6px; }
     .score-row label { margin-bottom: 0; }
-    .status { margin-top: 10px; min-height: 18px; font-size: 12px; color: #8fd19e; }
+    .check-row { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; line-height: 1.45; color: #d8deea; margin-top: 10px; }
+    .check-row input { margin-top: 2px; }
+    .check-row small { display: block; color: #8fb8ff; margin-top: 2px; }
+    .mode-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .mode-note { margin-top: 7px; font-size: 11px; line-height: 1.45; color: #aeb6c8; }
+    .reply-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .reply-count { font-size: 12px; color: #8fd19e; font-weight: 700; }
+    .reply-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+    .reply-card { border: 1px solid #384255; border-radius: 8px; background: #151820; padding: 9px; }
+    .reply-card.done { opacity: .62; }
+    .reply-title { font-size: 13px; font-weight: 700; color: #fff; margin-bottom: 4px; }
+    .reply-meta, .reply-last, .reply-state { font-size: 11px; line-height: 1.4; color: #aeb6c8; }
+    .reply-last { margin-top: 5px; color: #d8deea; }
+    .reply-actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; }
+    .reply-actions .btn { width: auto; min-width: 84px; padding: 7px 9px; font-size: 12px; }
+    .reply-empty { margin-top: 8px; font-size: 12px; line-height: 1.45; color: #8f98aa; }
+    .advanced-body { margin-top: 8px; }
+    .status { margin-top: 10px; min-height: 18px; font-size: 12px; line-height: 1.45; color: #8fd19e; }
+    .status[data-type="warn"] { color: #ffd18c; }
+    .status[data-type="error"] { color: #ff9b9b; }
   </style>
 </head>
 <body>
-  <h2>求职加速器</h2>
-  <label for="apiUrl">API 地址</label>
-  <input id="apiUrl" type="text" value="http://localhost:8000/match">
-  <button class="btn secondary" id="checkBackendBtn" type="button">检测后端</button>
-  <div class="section">
-    <label for="resumeText">简历内容</label>
-    <textarea id="resumeText" placeholder="粘贴简历内容到此处..."></textarea>
-    <button class="btn secondary" id="saveResumeBtn" type="button">保存简历</button>
-    <div class="resume-state empty" id="resumeStatus">未上传简历</div>
+  <div class="title-bar" id="popupTitleBar">
+    <h2 id="popupTitle">求职加速器</h2>
   </div>
-  <div class="section">
-    <div class="score-row">
-      <label for="minScore" id="minScoreLabel">匹配度 ≥ 80%</label>
+  <div class="subtitle">上传简历，在 BOSS 选好城市、薪资、经验后，选择投递模式即可开始。</div>
+  <input id="apiUrl" type="hidden" value="">
+  <div class="step">
+    <div class="step-title"><span>上传简历</span><span class="step-index">1/3</span></div>
+    <div class="file-row">
+      <input id="resumePdf" type="file" accept="application/pdf,.pdf">
+      <button class="btn secondary" id="parsePdfBtn" type="button">解析 PDF</button>
     </div>
-    <input id="minScore" type="range" min="50" max="100" step="5" value="80">
+    <div class="hint">优先上传文字版 PDF。扫描件/图片版 PDF 可能无法识别。</div>
+    <div class="resume-state empty" id="resumeStatus">未上传简历</div>
+    <details>
+      <summary>没有 PDF？粘贴或修改简历文本</summary>
+      <div class="advanced-body">
+        <textarea id="resumeText" placeholder="粘贴简历内容到此处..."></textarea>
+        <button class="btn secondary" id="saveResumeBtn" type="button">保存简历</button>
+      </div>
+    </details>
   </div>
-  <div class="section">
-    <label for="excludeKeywords">排除关键词</label>
-    <input id="excludeKeywords" type="text" placeholder="排除关键词，逗号分隔（如：培训,保险,销售）">
+  <div class="step">
+    <div class="step-title"><span>海投标准</span><span class="step-index">2/3</span></div>
+    <div class="target-row">
+      <div>
+        <label for="dailyGoal">今日目标</label>
+        <input id="dailyGoal" type="number" min="1" max="500" step="1" value="100">
+      </div>
+      <div>
+        <div class="score-row">
+          <label for="minScore" id="minScoreLabel">匹配度 ≥ 80%</label>
+        </div>
+        <input id="minScore" type="range" min="50" max="100" step="5" value="80">
+      </div>
+    </div>
+    <label class="check-row" for="autoConfirmChat">
+      <input id="autoConfirmChat" type="checkbox">
+      <span>自动留在此页继续投递<small>推荐开启。点立即沟通后自动选择“留在此页”，继续处理下一条。</small></span>
+    </label>
+    <div class="hint">BOSS 的城市、薪资、经验等条件请先在网页上选好，插件这里只做兜底判断。</div>
   </div>
-  <div class="section">
-    <label for="dailyGoal">今日目标沟通数</label>
-    <input id="dailyGoal" type="number" min="1" max="100" step="1" value="10">
+  <div class="step">
+    <div class="step-title"><span>选择投递模式</span><span class="step-index">3/3</span></div>
+    <div class="mode-grid">
+      <div>
+        <button class="btn fast" id="quickApplyBtn" type="button">快速投递</button>
+        <div class="mode-note">默认推荐。本地匹配优先，速度最快，适合批量海投。</div>
+      </div>
+      <div>
+        <button class="btn smart" id="smartApplyBtn" type="button">智能投递</button>
+        <div class="mode-note">云端辅助判断，可能更慢；超时会自动兜底。</div>
+      </div>
+    </div>
   </div>
-  <div class="hint">点击后会在 BOSS 页面右侧打开分析面板，后端读取同目录的 skills.json。</div>
-  <button class="btn" id="analyzeBtn">分析当前页面岗位</button>
-  <button class="btn secondary" id="clearCacheBtn" type="button">清空分析缓存</button>
+  <div class="step">
+    <div class="reply-head">
+      <div class="step-title" style="margin-bottom:0"><span>HR 回复</span></div>
+      <div class="reply-count" id="hrReplyCount">待回复 0</div>
+    </div>
+    <button class="btn secondary" id="checkHrReplyBtn" type="button">检查 HR 回复</button>
+    <div class="reply-list" id="hrReplyList"></div>
+  </div>
+  <details>
+    <summary>高级设置</summary>
+    <div class="advanced-body">
+      <label for="excludeKeywords">排除关键词</label>
+      <input id="excludeKeywords" type="text" placeholder="逗号分隔，如：培训,保险,销售">
+      <button class="btn secondary" id="checkBackendBtn" type="button">检测云端服务</button>
+      <button class="btn secondary" id="openPanelBtn" type="button">只打开侧栏</button>
+      <button class="btn secondary" id="clearCacheBtn" type="button">清空本机记录</button>
+    </div>
+  </details>
   <div class="status" id="status"></div>
+  <script src="config.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

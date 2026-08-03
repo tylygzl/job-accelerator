@@ -21,6 +21,7 @@ from pipeline import match_jd
 
 
 DEFAULT_CASES = Path(__file__).with_name("tests") / "eval_cases.json"
+DEFAULT_SUMMARY = Path(__file__).with_name("tests") / "eval_summary.json"
 
 
 def load_cases(path: Path) -> tuple[str, list[dict[str, Any]]]:
@@ -117,6 +118,45 @@ def run_cases(cases: list[dict[str, Any]], resume_text: str, use_llm: bool, jobs
     return [results_by_id[str(case["id"])] for case in cases]
 
 
+def build_summary(results: list[dict[str, Any]], use_llm: bool) -> dict[str, Any]:
+    total = len(results)
+    passed = sum(1 for row in results if row.get("passed"))
+    failed = total - passed
+    scores = [int(row["score"]) for row in results if isinstance(row.get("score"), int)]
+    seconds = [float(row.get("seconds", 0)) for row in results]
+    opening_required = [row for row in results if row.get("opening")]
+    opening_ok = sum(1 for row in opening_required if row.get("opening_ok"))
+    return {
+        "mode": "llm" if use_llm else "local",
+        "total": total,
+        "passed": passed,
+        "failed": failed,
+        "pass_rate": round(passed / total * 100, 1) if total else 0.0,
+        "average_score": round(sum(scores) / len(scores), 1) if scores else 0.0,
+        "average_seconds": round(sum(seconds) / len(seconds), 2) if seconds else 0.0,
+        "opening_checked": len(opening_required),
+        "opening_ok": opening_ok,
+    }
+
+
+def write_summary(path: Path, summary: dict[str, Any], results: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "summary": summary,
+        "failures": [
+            {
+                "id": row.get("id"),
+                "score": row.get("score"),
+                "expected": row.get("expected"),
+                "error": row.get("error", ""),
+            }
+            for row in results
+            if not row.get("passed")
+        ],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def print_results(results: list[dict[str, Any]], use_llm: bool) -> None:
     mode = "configured LLM chain" if use_llm else "local fallback smoke"
     print(f"\nJob Accelerator eval ({mode})")
@@ -140,6 +180,13 @@ def print_results(results: list[dict[str, Any]], use_llm: bool) -> None:
                 print(f"  error={row['error']}")
             if row["opening"] and not row["opening_ok"]:
                 print(f"  opening={row['opening']}")
+    summary = build_summary(results, use_llm)
+    print("\nSummary:")
+    print(
+        f"total={summary['total']} passed={summary['passed']} failed={summary['failed']} "
+        f"pass_rate={summary['pass_rate']}% avg_score={summary['average_score']} "
+        f"avg_time={summary['average_seconds']}s"
+    )
 
 
 def main() -> int:
@@ -148,6 +195,13 @@ def main() -> int:
     parser.add_argument("--llm", action="store_true", help="Use the real DeepSeek/LLM chain")
     parser.add_argument("--case", dest="case_ids", action="append", help="Run one case id; repeat or comma-separate ids")
     parser.add_argument("--jobs", type=int, default=1, help="Parallel workers. Use 2 for full --llm eval.")
+    parser.add_argument(
+        "--summary-json",
+        type=Path,
+        nargs="?",
+        const=DEFAULT_SUMMARY,
+        help="Write summary metrics to JSON. Defaults to tests/eval_summary.json when no path is given.",
+    )
     args = parser.parse_args()
 
     resume_text, cases = load_cases(args.cases)
@@ -162,6 +216,10 @@ def main() -> int:
 
     results = run_cases(cases, resume_text, args.llm, args.jobs)
     print_results(results, args.llm)
+    if args.summary_json:
+        summary = build_summary(results, args.llm)
+        write_summary(args.summary_json, summary, results)
+        print(f"summary_json={args.summary_json}")
     return 0 if all(row["passed"] for row in results) else 1
 
 

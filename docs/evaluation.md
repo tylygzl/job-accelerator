@@ -5,6 +5,34 @@
 1. `eval_accuracy.py`：小规模回归烟测，确认典型岗位不会突然分数大漂移。
 2. `eval_manual_table.py`：正式人工评估表，用 20-50 条真实 JD 对照人工判断。
 
+## 快速回归指标
+
+先跑固定样本，确认匹配规则没有被改坏：
+
+```bash
+python eval_accuracy.py --summary-json
+```
+
+脚本会输出：
+
+- `total`：评测样本数量。
+- `passed` / `failed`：分数范围和开场白检查是否通过。
+- `pass_rate`：通过率。
+- `average_score`：平均匹配分。
+- `average_seconds`：单条平均耗时。
+
+同时会生成：
+
+```text
+tests/eval_summary.json
+```
+
+这个文件只存摘要指标和失败样本，适合做版本对比。简历或面试里可以表达为：
+
+```text
+为岗位匹配规则构建固定 JD 回归评测集，统计通过率、平均匹配分和失败样本，用于复盘误判并迭代评分规则。
+```
+
 ## 正式评估表怎么填
 
 复制 `tests/manual_eval_template.csv`，填 20-50 条真实 JD。

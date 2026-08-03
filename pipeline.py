@@ -12,6 +12,7 @@ import re
 import copy
 import hashlib
 import threading
+import time
 from pathlib import Path
 from typing import Any, Literal, TypedDict
 
@@ -189,6 +190,8 @@ RESUME_SECTION_KEYWORDS = [
 SKILL_ALIASES: dict[str, list[str]] = {
     "Python": ["python"],
     "FastAPI": ["fastapi", "api开发", "后端api"],
+    "AI应用/大模型工具": ["ai应用", "aigc", "大模型", "llm", "智能体", "agent", "langgraph", "langchain", "rag", "prompt", "deepseek", "gpt", "dify", "coze", "autogen", "openclaw", "codex", "cursor", "trae", "vibe coding", "mvp"],
+    "业务流程自动化/RPA": ["自动化", "半自动", "流程自动化", "业务流程", "rpa", "影刀", "uibot", "n8n", "zapier", "make", "工作流", "sop", "内部工具", "提效", "插件"],
     "RAG检索增强生成": ["rag", "检索增强", "知识库", "混合检索"],
     "Prompt工程": ["prompt", "提示词", "结构化输出", "幻觉控制"],
     "Git/GitHub": ["git", "github", "开源"],
@@ -212,6 +215,8 @@ SKILL_ALIASES: dict[str, list[str]] = {
 FALLBACK_SKILL_RULES: list[tuple[str, list[str], str]] = [
     ("Python", ["python"], "required"),
     ("FastAPI", ["fastapi"], "required"),
+    ("AI应用/大模型工具", ["ai应用", "aigc", "大模型", "llm", "智能体", "agent", "langgraph", "langchain", "rag", "prompt", "deepseek", "gpt", "dify", "coze", "autogen", "openclaw", "codex", "cursor", "trae", "vibe coding", "mvp"], "required"),
+    ("业务流程自动化/RPA", ["自动化", "半自动", "流程自动化", "业务流程", "rpa", "影刀", "uibot", "n8n", "zapier", "make", "工作流", "sop", "内部工具", "提效", "插件"], "required"),
     ("LangChain/LangGraph", ["langchain", "langgraph", "agent", "智能体", "多agent"], "required"),
     ("DeepSeek/GPT API", ["deepseek", "gpt", "大模型api", "api调用", "llm api"], "required"),
     ("RAG检索增强生成", ["rag", "检索增强", "知识库"], "required"),
@@ -228,6 +233,109 @@ FALLBACK_SKILL_RULES: list[tuple[str, list[str], str]] = [
     ("强化学习/机器人", ["强化学习", "reinforcement learning", "ppo", "dqn", "sac", "模仿学习", "imitation learning", "行为克隆", "behavior cloning", "机器人", "ros", "moveit", "mujoco", "isaac gym", "gazebo"], "required"),
     ("机器学习/深度学习", ["机器学习", "machine learning", "深度学习", "deep learning"], "required"),
 ]
+
+
+JD_DOMAIN_RULES: list[dict[str, Any]] = [
+    {
+        "id": "ai_agent_app",
+        "label": "AI 应用/Agent 开发",
+        "keywords": ["ai应用", "大模型应用", "aigc", "llm", "智能体", "agent", "dify", "coze", "autogen", "openclaw", "工具调用", "任务规划", "记忆管理", "rag", "知识库", "prompt", "提示词", "mvp"],
+        "profile_terms": ["ai应用", "大模型", "llm", "agent", "智能体", "rag", "prompt", "langgraph", "langchain", "工具调用"],
+    },
+    {
+        "id": "automation",
+        "label": "业务流程自动化",
+        "keywords": ["自动化", "流程自动化", "业务流程", "工作流", "n8n", "zapier", "make", "sop", "内部工具", "提效", "批量内容生成", "数据处理分析"],
+        "profile_terms": ["自动化", "流程", "工作流", "内部工具", "提效", "业务流程自动化", "ai工具落地"],
+    },
+    {
+        "id": "rpa",
+        "label": "RPA 流程自动化",
+        "keywords": ["rpa", "影刀", "uibot", "流程机器人", "rpa机器人"],
+        "profile_terms": ["rpa", "影刀", "uibot", "流程机器人", "rpa流程自动化"],
+    },
+    {
+        "id": "backend_infra",
+        "label": "后端/高并发基础工程",
+        "keywords": ["后端开发", "架构设计", "高并发", "大流量", "亿级用户", "性能调优", "支付", "金融服务", "操作系统"],
+        "profile_terms": ["后端", "fastapi", "api", "高并发", "支付", "java", "golang", "操作系统", "性能调优"],
+    },
+    {
+        "id": "quality_ops",
+        "label": "质量/流程运营",
+        "keywords": ["质量运营", "质量目标", "iso9001", "iso13485", "管理体系", "内部审核", "供应商审核", "管理评审", "质量文化", "流程运营"],
+        "profile_terms": ["质量运营", "流程运营", "体系运营", "运营协作"],
+    },
+    {
+        "id": "ai_customer_ops",
+        "label": "AI 客服/外呼运营",
+        "keywords": ["外呼", "呼叫中心", "ai客服", "语音机器人", "外呼机器人", "客服机器人", "话术流程", "任务投放", "接通率", "意向率", "有效通话", "asr", "badcase", "样本抽检"],
+        "profile_terms": ["ai客服", "外呼", "客服机器人", "运营", "数据分析", "报表自动化"],
+    },
+    {
+        "id": "content_labeling",
+        "label": "内容审核/数据标注",
+        "keywords": ["内容审核", "内容鉴审", "数据标注", "标注师", "目标框", "cvat", "anylabeling", "样本质检", "标注规范", "人工校正", "社区治理"],
+        "profile_terms": ["内容审核", "内容鉴审", "数据标注", "标注", "质检"],
+    },
+    {
+        "id": "sales_bd",
+        "label": "销售/BD",
+        "keywords": ["销售实习", "销售顾问", "销售目标", "销售转化", "电话销售", "电话邀约", "客户建联", "客户名单", "客户线索", "crm", "课程顾问", "保险", "地推", "私域运营", "bd实习"],
+        "profile_terms": ["销售", "bd", "课程顾问", "客户成功", "私域运营"],
+    },
+    {
+        "id": "robot_rl",
+        "label": "机器人/强化学习算法",
+        "keywords": ["强化学习", "reinforcement learning", "模仿学习", "imitation learning", "行为克隆", "behavior cloning", "逆强化学习", "机器人", "运动规划", "ros", "moveit", "mujoco", "isaac gym", "gazebo"],
+        "profile_terms": ["强化学习", "机器人", "pytorch", "tensorflow", "ros", "moveit", "mujoco", "isaac gym", "gazebo"],
+    },
+    {
+        "id": "media_editing",
+        "label": "内容剪辑/直播运营",
+        "keywords": ["剪辑", "剪映", "短视频", "短剧", "直播运营", "主播", "抖音", "快手", "网感"],
+        "profile_terms": ["剪辑", "短视频", "直播运营", "内容运营"],
+    },
+    {
+        "id": "legal",
+        "label": "法律实务",
+        "keywords": ["律所", "法律事务", "法学", "诉讼", "仲裁", "非诉", "法考", "律师"],
+        "profile_terms": ["法学", "法律", "律所", "律师", "法考"],
+    },
+    {
+        "id": "ecommerce_ops",
+        "label": "电商运营",
+        "keywords": ["电商运营", "淘宝", "京东", "商品上下架", "标题优化", "库存核对", "618", "双 11", "售后流程"],
+        "profile_terms": ["电商运营", "店铺运营", "平台运营"],
+    },
+]
+
+
+MATCH_SIGNAL_RULES: dict[str, dict[str, list[str]]] = {
+    "primary_outputs": {
+        "software_system": ["系统", "平台", "接口", "api", "后端", "插件", "工具开发", "功能开发", "代码", "开发", "部署", "agent搭建", "工作流编排", "mvp原型"],
+        "creative_assets": ["视频", "生图", "商业内容", "短剧", "广告", "视觉设计", "剪辑", "动画", "数字媒体", "aigc创作", "ai设计师", "ai设计", "创作者"],
+        "ops_process": ["运营", "质检", "审核", "标注", "流程运营", "报表", "复盘", "任务投放", "样本抽检"],
+        "sales_conversion": ["销售", "邀约", "客户建联", "客户线索", "销售转化", "crm", "课程顾问", "私域"],
+        "research_algorithm": ["算法实验", "论文复现", "强化学习", "模仿学习", "模型训练", "训练执行", "微调", "lora训练"],
+        "legal_documents": ["诉讼", "仲裁", "非诉", "法律事务", "律师实务", "法考", "法律文书"],
+    },
+    "tools": {
+        "software_dev": ["python", "fastapi", "langgraph", "langchain", "rag", "api", "javascript", "docker", "sql", "github", "deepseek", "gpt"],
+        "creative_ai": ["midjourney", "comfyui", "runway", "即梦", "soar", "soar2", "stable diffusion", "sd", "flux", "lora", "aigc设计工具"],
+        "video_design": ["pr", "premiere", "ae", "after effects", "剪映", "视频剪辑", "视觉设计", "美术", "审美", "动画", "数字媒体"],
+        "ops_data": ["excel", "sql", "python", "数据清洗", "报表", "看板", "数据分析"],
+        "sales_crm": ["crm", "企微", "客户名单", "客户线索", "电话", "私域"],
+        "legal": ["法考", "法律检索", "裁判文书", "诉讼", "仲裁"],
+    },
+    "proof": {
+        "code_project": ["github", "gitee", "开源", "项目", "部署", "代码", "接口", "系统"],
+        "creative_portfolio": ["作品集", "个人作品", "创作案例", "视频作品", "设计作品", "aigc作品", "ai广告", "漫画", "短剧"],
+        "ops_case": ["运营案例", "复盘报告", "sop", "流程图", "报表", "看板"],
+        "sales_case": ["销售业绩", "转化率", "客户案例", "crm记录"],
+        "legal_cert": ["法考", "法律职业资格", "律所实习"],
+    },
+}
 
 
 def _model_dump(model: BaseModel) -> dict[str, Any]:
@@ -507,6 +615,7 @@ def make_chat_model(
     *,
     temperature: float = 0,
     timeout: float | None = None,
+    max_retries: int | None = None,
     json_mode: bool = False,
     required: bool = False,
 ) -> Any | None:
@@ -539,6 +648,7 @@ def make_chat_model(
         base_url=base_url,
         temperature=temperature,
         timeout=timeout if timeout is not None else float(os.getenv("JOB_ACCELERATOR_LLM_TIMEOUT", "45")),
+        max_retries=max_retries if max_retries is not None else _env_int(0, "JOB_ACCELERATOR_LLM_MAX_RETRIES", "LLM_MAX_RETRIES"),
         openai_proxy=proxy if proxy else None,
     )
     return _bind_json_mode(model) if json_mode else model
@@ -709,6 +819,15 @@ def _infer_target_profile(skills_profile: dict[str, Any]) -> dict[str, list[str]
     if _contains_any(text, ["chrome extension", "浏览器插件", "javascript", "自动化"]):
         add(target_roles, "浏览器插件开发实习生", "自动化工具开发实习生")
         add(core_domains, "浏览器插件", "前端自动化")
+
+    if _contains_any(text, ["自动化", "半自动", "流程", "提效", "工具", "插件", "sop", "rpa", "低代码", "内部工具"]):
+        add(target_roles, "AI 自动化工具开发实习生", "业务流程自动化实习生")
+        add(core_domains, "业务流程自动化", "AI 工具落地", "内部工具开发")
+        add(transferable_roles, "RPA 实习生", "AI 产品运营实习生", "数据自动化实习生")
+
+    if _contains_any(text, ["rpa", "影刀", "uibot", "来也", "流程机器人"]):
+        add(target_roles, "RPA 开发实习生")
+        add(core_domains, "RPA 流程自动化")
 
     if _contains_any(text, ["pytorch", "tensorflow", "强化学习", "reinforcement learning", "ppo", "dqn", "sac", "模仿学习", "imitation learning", "行为克隆", "behavior cloning", "机器人", "ros", "moveit", "mujoco", "isaac gym", "gazebo"]):
         add(target_roles, "机器人算法实习生", "强化学习实习生", "运动控制实习生")
@@ -934,7 +1053,20 @@ def _context_marks_preferred(jd_text: str, alias: str) -> bool:
     if idx < 0:
         return False
     window = jd_text[max(0, idx - 24) : idx + 60]
-    return any(mark in window for mark in ["优先", "加分", "更好", "熟悉者"])
+    return any(mark in window for mark in ["优先", "加分", "更好", "熟悉者", "标签", "亮点"])
+
+
+def _compact_text(text: str) -> str:
+    return re.sub(r"[\s\-_·/|]+", "", str(text or "").lower())
+
+
+def _is_false_positive_skill_hit(skill: str, alias: str, jd_text: str) -> bool:
+    if skill == "强化学习/机器人" and alias.lower() in {"机器人"}:
+        idx = jd_text.lower().find(alias.lower())
+        window = jd_text[max(0, idx - 24) : idx + 60] if idx >= 0 else jd_text
+        compact = _compact_text(window)
+        return _contains_any(compact, ["rpa机器人", "软件机器人", "流程机器人", "语音机器人", "外呼机器人", "客服机器人", "聊天机器人", "机器人工作视频", "机器人视频", "机器人数据标注", "机器人标注"])
+    return False
 
 
 def _fallback_jd_analysis(jd_text: str) -> JDAnalysis:
@@ -946,6 +1078,8 @@ def _fallback_jd_analysis(jd_text: str) -> JDAnalysis:
     for skill, aliases, default_priority in FALLBACK_SKILL_RULES:
         hit_alias = next((alias for alias in aliases if alias.lower() in lower), None)
         if not hit_alias or skill in seen:
+            continue
+        if _is_false_positive_skill_hit(skill, hit_alias, jd_text):
             continue
         seen.add(skill)
         priority = "preferred" if default_priority == "preferred" or _context_marks_preferred(jd_text, hit_alias) else "required"
@@ -975,6 +1109,20 @@ def _fallback_jd_analysis(jd_text: str) -> JDAnalysis:
     )
 
 
+def summarize_jd_skills(jd_text: str, limit: int = 12) -> dict[str, Any]:
+    """Return a lightweight JD skill summary for trace logs and evaluation."""
+    jd_analysis = _fallback_jd_analysis(jd_text or "")
+    required = [_model_dump(item) for item in jd_analysis.required[:limit]]
+    preferred = [_model_dump(item) for item in jd_analysis.preferred[:limit]]
+    return {
+        "role": jd_analysis.role,
+        "required": required,
+        "preferred": preferred,
+        "soft_skills": jd_analysis.soft_skills[:limit],
+        "keywords": jd_analysis.keywords[:limit],
+    }
+
+
 def _candidate_skill_items(skills_profile: dict[str, Any]) -> list[dict[str, str]]:
     items: list[dict[str, str]] = []
     skills = skills_profile.get("skills", {}) if isinstance(skills_profile, dict) else {}
@@ -999,6 +1147,28 @@ def _candidate_skill_items(skills_profile: dict[str, Any]) -> list[dict[str, str
                 }
             )
     return items
+
+
+def summarize_resume_skills(
+    resume_text: str = "",
+    *,
+    skills_profile: dict[str, Any] | None = None,
+    limit: int = 16,
+) -> dict[str, Any]:
+    """Return a lightweight resume skill summary without forcing a real LLM call."""
+    profile = skills_profile
+    if profile is None and (resume_text or "").strip():
+        profile = _get_resume_skills_profile((resume_text or "").strip(), None)
+    if profile is None:
+        profile = load_skills_profile()
+
+    items = _candidate_skill_items(profile)
+    target_profile = profile.get("target_profile", {}) if isinstance(profile, dict) else {}
+    return {
+        "skill_count": len(items),
+        "skills": items[:limit],
+        "target_profile": target_profile if isinstance(target_profile, dict) else {},
+    }
 
 
 def _aliases_for(skill: str) -> list[str]:
@@ -1188,6 +1358,277 @@ def _matched_report_text(report: dict[str, Any]) -> str:
     return " ".join(parts)
 
 
+def _keyword_hits(text: str, keywords: list[str]) -> list[str]:
+    lower = str(text or "").lower()
+    compact = _compact_text(lower)
+    hits: list[str] = []
+    for keyword in keywords:
+        key = str(keyword or "").lower()
+        if not key:
+            continue
+        if re.fullmatch(r"[a-z0-9+#.]{1,2}", key):
+            if re.search(rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])", lower):
+                hits.append(keyword)
+            continue
+        if key in lower or _compact_text(key) in compact:
+            hits.append(keyword)
+    return hits
+
+
+def _classify_jd_domains(jd_text: str) -> list[dict[str, Any]]:
+    domains: list[dict[str, Any]] = []
+    for rule in JD_DOMAIN_RULES:
+        hits = _keyword_hits(jd_text, rule.get("keywords", []))
+        if not hits:
+            continue
+        if rule["id"] == "robot_rl":
+            hits = [
+                hit for hit in hits
+                if hit != "机器人" or not _is_false_positive_skill_hit("强化学习/机器人", "机器人", jd_text)
+            ]
+            if not hits:
+                continue
+        domains.append(
+            {
+                "id": rule["id"],
+                "label": rule["label"],
+                "hits": hits,
+                "profile_terms": rule.get("profile_terms", []),
+            }
+        )
+    return domains
+
+
+def _has_domain(domains: list[dict[str, Any]], *domain_ids: str) -> bool:
+    wanted = set(domain_ids)
+    return any(domain.get("id") in wanted for domain in domains)
+
+
+def _target_profile_text(skills_profile: dict[str, Any], sections: list[str] | None = None) -> str:
+    target_profile = skills_profile.get("target_profile", {}) if isinstance(skills_profile, dict) else {}
+    if not isinstance(target_profile, dict):
+        return ""
+    selected = sections or ["target_roles", "core_domains", "transferable_roles", "avoid_roles"]
+    values: list[str] = []
+    for section in selected:
+        values.extend(_string_list(target_profile.get(section)))
+    return " ".join(values).lower()
+
+
+def _profile_evidence_text(skills_profile: dict[str, Any]) -> str:
+    if isinstance(skills_profile, dict):
+        evidence_profile = dict(skills_profile)
+        evidence_profile.pop("target_profile", None)
+    else:
+        evidence_profile = skills_profile
+    try:
+        return json.dumps(evidence_profile, ensure_ascii=False).lower()
+    except TypeError:
+        return str(evidence_profile).lower()
+
+
+def _candidate_evidence_matches_any(skills_profile: dict[str, Any], keywords: list[str]) -> bool:
+    parts: list[str] = []
+    skills = skills_profile.get("skills", {}) if isinstance(skills_profile, dict) else {}
+    for group in ["must_have", "familiar"]:
+        for item in skills.get(group, []) or []:
+            if isinstance(item, dict):
+                parts.append(str(item.get("evidence", "")))
+    for project in skills_profile.get("projects", []) or []:
+        if isinstance(project, dict):
+            parts.append(str(project.get("evidence", "")))
+            parts.extend(str(keyword) for keyword in project.get("keywords", []) or [])
+    return _contains_any(" ".join(parts), keywords)
+
+
+def _signals_for_text(text: str) -> dict[str, dict[str, list[str]]]:
+    signals: dict[str, dict[str, list[str]]] = {}
+    for section, rules in MATCH_SIGNAL_RULES.items():
+        section_hits: dict[str, list[str]] = {}
+        for signal_id, keywords in rules.items():
+            hits = _keyword_hits(text, keywords)
+            if hits:
+                section_hits[signal_id] = hits
+        signals[section] = section_hits
+    return signals
+
+
+def _profile_signal_text(skills_profile: dict[str, Any]) -> str:
+    evidence_text = _profile_evidence_text(skills_profile)
+    target_text = _target_profile_text(skills_profile, ["target_roles", "core_domains", "transferable_roles"])
+    return f"{evidence_text}\n{target_text}"
+
+
+def _jd_match_signals(jd_text: str) -> dict[str, dict[str, list[str]]]:
+    return _signals_for_text(jd_text)
+
+
+def _profile_match_signals(skills_profile: dict[str, Any]) -> dict[str, dict[str, list[str]]]:
+    return _signals_for_text(_profile_signal_text(skills_profile))
+
+
+def _signal_hits(signals: dict[str, dict[str, list[str]]], section: str, signal_id: str) -> list[str]:
+    return signals.get(section, {}).get(signal_id, [])
+
+
+def _signal_strength(signals: dict[str, dict[str, list[str]]], section: str, *signal_ids: str) -> int:
+    return sum(len(_signal_hits(signals, section, signal_id)) for signal_id in signal_ids)
+
+
+def _has_signal(signals: dict[str, dict[str, list[str]]], section: str, *signal_ids: str) -> bool:
+    return any(_signal_hits(signals, section, signal_id) for signal_id in signal_ids)
+
+
+def _primary_output_overlap(jd_signals: dict[str, dict[str, list[str]]], profile_signals: dict[str, dict[str, list[str]]]) -> bool:
+    jd_outputs = set(jd_signals.get("primary_outputs", {}))
+    profile_outputs = set(profile_signals.get("primary_outputs", {}))
+    return bool(jd_outputs and profile_outputs and jd_outputs & profile_outputs)
+
+
+def _domain_relation(domain: dict[str, Any], skills_profile: dict[str, Any]) -> str:
+    terms = [str(term) for term in domain.get("profile_terms", []) if term]
+    target_text = _target_profile_text(skills_profile, ["target_roles", "core_domains"])
+    transferable_text = _target_profile_text(skills_profile, ["transferable_roles"])
+    avoid_text = _target_profile_text(skills_profile, ["avoid_roles"])
+    evidence_text = _profile_evidence_text(skills_profile)
+
+    if terms and _contains_any(avoid_text, terms):
+        return "avoid"
+    if terms and _contains_any(target_text, terms):
+        return "target"
+    if terms and _contains_any(transferable_text, terms):
+        return "transferable"
+    if terms and _contains_any(evidence_text, terms):
+        return "evidence"
+    return "unrelated"
+
+
+def _domain_relation_for(domains: list[dict[str, Any]], domain_id: str, skills_profile: dict[str, Any]) -> str:
+    for domain in domains:
+        if domain.get("id") == domain_id:
+            return _domain_relation(domain, skills_profile)
+    return "unrelated"
+
+
+def _report_with_score_floor(report: dict[str, Any], floor: int, reason: str) -> dict[str, Any]:
+    score = _coerce_score(report.get("match_score", 0))
+    if score >= floor:
+        return report
+    boosted = dict(report)
+    boosted["match_score"] = floor
+    boosted["risk_level"] = _risk_level(floor)
+    suggestions = list(boosted.get("suggestions") or [])
+    suggestions.insert(0, f"分数补偿：{reason}，最低 {floor} 分。")
+    boosted["suggestions"] = suggestions[:5]
+    return boosted
+
+
+def _report_with_score_cap(report: dict[str, Any], cap: int, reason: str) -> dict[str, Any]:
+    score = _coerce_score(report.get("match_score", 0))
+    if score <= cap:
+        return report
+    capped = dict(report)
+    capped["match_score"] = cap
+    capped["risk_level"] = _risk_level(cap)
+    suggestions = list(capped.get("suggestions") or [])
+    suggestions.insert(0, f"分数封顶：{reason}，最高 {cap} 分。")
+    capped["suggestions"] = suggestions[:5]
+    return capped
+
+
+def _apply_signal_guardrails(report: dict[str, Any], jd_text: str, skills_profile: dict[str, Any]) -> dict[str, Any]:
+    jd_signals = _jd_match_signals(jd_text)
+    profile_signals = _profile_match_signals(skills_profile)
+    adjusted = dict(report)
+
+    creative_jd_strength = (
+        _signal_strength(jd_signals, "primary_outputs", "creative_assets")
+        + _signal_strength(jd_signals, "tools", "creative_ai", "video_design")
+        + _signal_strength(jd_signals, "proof", "creative_portfolio")
+    )
+    creative_profile_strength = (
+        _signal_strength(profile_signals, "primary_outputs", "creative_assets")
+        + _signal_strength(profile_signals, "tools", "creative_ai", "video_design")
+        + _signal_strength(profile_signals, "proof", "creative_portfolio")
+    )
+    if creative_jd_strength >= 3 and creative_profile_strength == 0:
+        adjusted = _report_with_score_cap(
+            adjusted,
+            60,
+            "JD 主产出是 AIGC/视频/视觉作品，但简历缺少创作工具、剪辑设计或作品集证据",
+        )
+    elif _has_signal(jd_signals, "proof", "creative_portfolio") and not _has_signal(profile_signals, "proof", "creative_portfolio"):
+        adjusted = _report_with_score_cap(
+            adjusted,
+            70,
+            "JD 明确看重作品集/创作案例，但简历证据里没有对应作品证明",
+        )
+
+    jd_outputs = set(jd_signals.get("primary_outputs", {}))
+    profile_outputs = set(profile_signals.get("primary_outputs", {}))
+    if jd_outputs and profile_outputs and not _primary_output_overlap(jd_signals, profile_signals):
+        adjusted = _report_with_score_cap(
+            adjusted,
+            65,
+            "JD 主产出和简历主证据不一致，不能只按相同领域关键词给高分",
+        )
+
+    jd_tool_groups = set(jd_signals.get("tools", {}))
+    profile_tool_groups = set(profile_signals.get("tools", {}))
+    if len(jd_tool_groups) >= 2 and not (jd_tool_groups & profile_tool_groups):
+        adjusted = _report_with_score_cap(
+            adjusted,
+            65,
+            "JD 的主要工具栈和简历工具证据不重合",
+        )
+
+    return adjusted
+
+
+def _apply_domain_adjustments(report: dict[str, Any], jd_text: str, skills_profile: dict[str, Any]) -> dict[str, Any]:
+    domains = _classify_jd_domains(jd_text)
+    if not domains:
+        return report
+
+    adjusted = dict(report)
+
+    if _has_domain(domains, "quality_ops") and _has_domain(domains, "ai_agent_app", "automation"):
+        relation = _domain_relation_for(domains, "ai_agent_app", skills_profile)
+        if relation in {"target", "transferable", "evidence"}:
+            adjusted = _report_with_score_floor(adjusted, 55, "岗位主体偏质量/流程运营，但包含 AI 工具落地，和用户画像有相邻交集")
+            adjusted = _report_with_score_cap(adjusted, 68, "岗位主体仍是质量/流程运营，不是完整 AI 应用开发")
+
+    if _has_domain(domains, "ai_customer_ops"):
+        support_terms = ["python", "sql", "数据分析", "报表", "自动化", "ai工具", "prompt", "大模型", "agent"]
+        if _candidate_supports_direction(skills_profile, support_terms):
+            adjusted = _report_with_score_floor(adjusted, 55, "岗位偏 AI 客服/外呼运营，但数据处理、话术流程和自动化能力可迁移")
+            adjusted = _report_with_score_cap(adjusted, 68, "岗位主体不是工程开发，最高按相邻方向处理")
+
+    if _has_domain(domains, "rpa") and not _has_domain(domains, "ai_agent_app"):
+        explicit_rpa_support = _candidate_evidence_matches_any(skills_profile, ["rpa", "影刀", "uibot", "流程机器人"])
+        automation_support = _candidate_supports_direction(skills_profile, ["自动化", "流程", "工作流", "内部工具", "提效"])
+        if explicit_rpa_support:
+            adjusted = _report_with_score_floor(adjusted, 75, "用户画像有明确 RPA 证据")
+        elif automation_support:
+            adjusted = _report_with_score_floor(adjusted, 58, "RPA 属于流程自动化，相比核心 Agent/RAG 是可迁移方向")
+            adjusted = _report_with_score_cap(adjusted, 72, "缺少明确 RPA 工具证据，最高按可迁移方向处理")
+        else:
+            adjusted = _report_with_score_cap(adjusted, 50, "岗位核心是 RPA 工具搭建，当前用户画像缺少对应证据")
+
+    if _has_domain(domains, "backend_infra"):
+        infra_terms = ["高并发", "大流量", "亿级用户", "支付", "金融服务", "操作系统", "性能调优", "java", "golang", "c++", "php"]
+        if _contains_any(jd_text, infra_terms) and not _candidate_supports_direction(skills_profile, infra_terms):
+            adjusted = _report_with_score_cap(adjusted, 72, "岗位主体是后端/支付/高并发工程，AI 只是业务探索或加分项")
+
+    vague_ai_product_terms = ["ai native", "产品定义", "产品创新", "有灵魂", "陪伴成长", "前沿探索"]
+    concrete_build_terms = ["python", "fastapi", "api", "代码", "开发", "测试", "调试", "部署", "rag", "知识库", "prompt", "工具调用", "dify", "coze", "langchain", "langgraph", "autogen", "openclaw"]
+    if _has_domain(domains, "ai_agent_app") and _contains_any(jd_text, vague_ai_product_terms):
+        if not _contains_any(jd_text, concrete_build_terms):
+            adjusted = _report_with_score_cap(adjusted, 72, "岗位方向接近 AI/Agent，但 JD 缺少可验证的工程技能要求")
+
+    return adjusted
+
+
 def _score_cap_for_jd(jd_text: str, report: dict[str, Any], skills_profile: dict[str, Any]) -> tuple[int | None, str]:
     jd_lower = jd_text.lower()
     report_text = _matched_report_text(report).lower()
@@ -1196,17 +1637,19 @@ def _score_cap_for_jd(jd_text: str, report: dict[str, Any], skills_profile: dict
     if avoid_hit and not target_hit:
         return 35, "岗位方向命中用户画像中的规避方向"
 
-    sales_terms = ["销售", "电话沟通", "客户沟通", "邀约", "转化", "地推", "保险", "课程顾问", "带薪培训", "bd", "私域运营"]
+    sales_terms = ["销售实习", "销售顾问", "销售目标", "销售转化", "电话销售", "电话邀约", "客户建联", "客户名单", "客户线索", "crm", "地推", "保险", "课程顾问", "带薪培训", "bd实习", "私域运营"]
     if _contains_any(jd_lower, sales_terms):
         if not _candidate_supports_direction(skills_profile, sales_terms):
             return 35, "岗位核心是销售/培训，不是技术开发"
 
-    content_terms = ["内容审核", "内容鉴审", "审核", "数据标注", "标注", "运营协助", "内容运营", "社区治理", "质检"]
+    content_terms = ["内容审核", "内容鉴审", "数据标注", "标注师", "目标框", "cvat", "anylabeling", "样本质检", "标注规范", "人工校正", "社区治理"]
     if _contains_any(jd_lower, content_terms):
         if not _candidate_supports_direction(skills_profile, content_terms):
             return 45, "岗位核心是审核/标注/运营，不是 AI 应用开发"
 
-    if _contains_any(jd_lower, ["强化学习", "reinforcement learning", "模仿学习", "imitation learning", "行为克隆", "behavior cloning", "逆强化学习", "机器人", "运动规划", "ros", "moveit", "mujoco", "isaac gym", "gazebo"]):
+    robot_terms = ["强化学习", "reinforcement learning", "模仿学习", "imitation learning", "行为克隆", "behavior cloning", "逆强化学习", "运动规划", "ros", "moveit", "mujoco", "isaac gym", "gazebo"]
+    has_robot_term = _contains_any(jd_lower, robot_terms) or ("机器人" in jd_lower and not _is_false_positive_skill_hit("强化学习/机器人", "机器人", jd_text))
+    if has_robot_term:
         rl_evidence = ["pytorch", "tensorflow", "强化学习", "reinforcement learning", "ppo", "dqn", "sac", "模仿学习", "imitation learning", "行为克隆", "behavior cloning", "机器人", "机器人控制", "运动规划", "ros", "moveit", "mujoco", "isaac gym", "gazebo", "深度学习"]
         if not _candidate_supports_direction(skills_profile, rl_evidence) and not _contains_any(report_text, rl_evidence):
             return 55, "岗位强依赖机器人/强化学习证据，当前简历证据不足"
@@ -1220,21 +1663,13 @@ def _score_cap_for_jd(jd_text: str, report: dict[str, Any], skills_profile: dict
 
 
 def _apply_score_guardrails(report: dict[str, Any], jd_text: str, skills_profile: dict[str, Any]) -> dict[str, Any]:
-    cap, reason = _score_cap_for_jd(jd_text, report, skills_profile)
+    adjusted = _apply_domain_adjustments(report, jd_text, skills_profile)
+    adjusted = _apply_signal_guardrails(adjusted, jd_text, skills_profile)
+    cap, reason = _score_cap_for_jd(jd_text, adjusted, skills_profile)
     if cap is None:
-        return report
+        return adjusted
 
-    score = _coerce_score(report.get("match_score", 0))
-    if score <= cap:
-        return report
-
-    guarded = dict(report)
-    guarded["match_score"] = cap
-    guarded["risk_level"] = _risk_level(cap)
-    suggestions = list(guarded.get("suggestions") or [])
-    suggestions.insert(0, f"分数封顶：{reason}，最高 {cap} 分。")
-    guarded["suggestions"] = suggestions[:5]
-    return guarded
+    return _report_with_score_cap(adjusted, cap, reason)
 
 
 def build_match_graph(llm: Any | None = None, use_llm_jd_decomposer: bool = False) -> Any:
@@ -1442,6 +1877,43 @@ def _opening_hook_clause(jd_text: str, skills: list[str]) -> str:
     return "我看岗位核心要求还需要进一步确认"
 
 
+def _opening_guardrail_reason(report: dict[str, Any]) -> str:
+    suggestions = " ".join(str(item) for item in report.get("suggestions", []) or [])
+    if "AIGC/视频/视觉作品" in suggestions:
+        return "creative_output_gap"
+    if "作品集/创作案例" in suggestions:
+        return "creative_proof_gap"
+    if "主产出和简历主证据不一致" in suggestions:
+        return "primary_output_gap"
+    if "主要工具栈和简历工具证据不重合" in suggestions:
+        return "tool_gap"
+    return ""
+
+
+def _opening_guardrail_hook(jd_text: str, reason: str) -> str:
+    if reason in {"creative_output_gap", "creative_proof_gap"}:
+        keywords = ["视频", "生图", "midjourney", "comfyui", "runway", "剪映", "aigc", "作品"]
+    elif reason == "tool_gap":
+        keywords = ["工具", "平台", "框架", "软件", "系统"]
+    else:
+        keywords = ["负责", "要求", "使用", "完成", "搭建", "开发"]
+
+    excerpt = _opening_jd_excerpt(jd_text, 900)
+    lower = excerpt.lower()
+    for keyword in keywords:
+        idx = lower.find(keyword.lower())
+        if idx < 0:
+            continue
+        start_candidates = [excerpt.rfind(mark, 0, idx) for mark in ["。", "；", ";", "\n"]]
+        end_candidates = [pos for pos in [excerpt.find(mark, idx) for mark in ["。", "；", ";", "\n"]] if pos >= 0]
+        start = max(start_candidates) + 1 if max(start_candidates) >= 0 else max(0, idx - 24)
+        end = min(end_candidates) if end_candidates else min(len(excerpt), idx + 90)
+        hook = _clean_jd_hook_line(excerpt[start:end])
+        if len(hook) >= 8:
+            return f"我看岗位里提到“{hook}”"
+    return ""
+
+
 def _opening_target(report: dict[str, Any], jd_text: str = "") -> str:
     for line in jd_text.splitlines():
         clean = line.strip()
@@ -1503,6 +1975,13 @@ def _rule_opening(report: dict[str, Any], skills_profile: dict[str, Any], jd_tex
             seen_evidence.add(key)
             evidence_parts.append(compact)
     evidence_text = "；".join(evidence_parts) or "已有项目中可复盘实现、指标和部署细节"
+    guardrail_reason = _opening_guardrail_reason(report)
+    if score < 75 and guardrail_reason in {"creative_output_gap", "creative_proof_gap"}:
+        guarded_hook = _opening_guardrail_hook(jd_text, guardrail_reason) or hook_clause
+        return f"{subject}，{guarded_hook}，这块和我的视频/视觉作品经验只有部分交集；我能补充的是{skills_text}相关项目：{evidence_text}。{_opening_tail(skills_profile, '可展开讲AI工具落地和自动化实现')}"
+    if score < 75 and guardrail_reason in {"primary_output_gap", "tool_gap"}:
+        guarded_hook = _opening_guardrail_hook(jd_text, guardrail_reason) or hook_clause
+        return f"{subject}，{guarded_hook}，这块和我的主项目方向不完全一致；我能先补充{skills_text}相关经验：{evidence_text}。{_opening_tail(skills_profile, '我可以说明能迁移的部分和经验边界')}"
     if score < 50:
         return f"{subject}，{hook_clause}，这块和我的经历只有部分交集；能先聊的是{skills_text}相关项目：{evidence_text}。{_opening_tail(skills_profile, '我可以补充项目细节')}"
     if score < 75:
@@ -1538,6 +2017,7 @@ def _generate_opening_with_llm(
     skills_profile: dict[str, Any],
     jd_text: str,
     llm: Any | None,
+    trace: dict[str, Any] | None = None,
 ) -> str:
     if llm is None or not _use_llm_opening():
         return ""
@@ -1545,6 +2025,8 @@ def _generate_opening_with_llm(
     target = _opening_target(report, jd_text)
     score = _coerce_score(report.get("match_score", 0))
     try:
+        if trace is not None:
+            trace["llm_opening_called"] = True
         data = _invoke_json(
             llm,
             OPENING_MESSAGE_PROMPT,
@@ -1561,8 +2043,17 @@ def _generate_opening_with_llm(
                 ensure_ascii=False,
             ),
         )
-        return _sanitize_opening_message(data.get("opening_message", ""), target, fallback, score, skills_profile)
+        if trace is not None:
+            trace["llm_opening_result"] = data
+        clean = _sanitize_opening_message(data.get("opening_message", ""), target, fallback, score, skills_profile)
+        if score < 75 and _opening_guardrail_reason(report):
+            cautious_words = ["部分交集", "不完全一致", "经验边界", "需要确认", "能迁移"]
+            if not any(word in clean for word in cautious_words):
+                return fallback
+        return clean
     except Exception as exc:
+        if trace is not None:
+            trace["llm_opening_error"] = f"{type(exc).__name__}: {exc}"
         print(f"[opening] llm failed: {exc}")
         return ""
 
@@ -1633,12 +2124,759 @@ def generate_opening(report: dict[str, Any], skills_profile: dict[str, Any], jd_
     return fallback
 
 
+CHAT_REPLY_POLICY_VERSION = "2026-08-02-rag-ready-v2"
+
+CHAT_REPLY_INTENT_LABELS = {
+    "ask_resume": "索要简历/作品材料",
+    "ask_availability": "可沟通/可到岗/时间可用性",
+    "ask_project": "项目或经历确认",
+    "interview_question": "面试题/技术追问",
+    "schedule_interview": "面试邀约排期",
+    "salary": "薪资/待遇确认",
+    "location": "地点/远程/驻场确认",
+    "unknown": "未识别意图",
+}
+
+CHAT_REPLY_LLM_PROMPT = """你是求职聊天回复草稿助手。你只能基于输入中的 evidence 生成短草稿。
+只输出 JSON object，不要 Markdown，不要解释：
+{"draft": "给 HR 的一句短回复"}
+
+规则：
+- 不超过 90 字。
+- 只使用 evidence 里的证据，不要编造项目、指标、经历、薪资、到岗时间、远程/驻场接受条件。
+- 面试题只做简短承接，说明可以在面试中围绕背景、实现、结果和边界展开，不输出完整长答案。
+- 不承诺薪资、到岗、远程、报价、交付，不替用户做决定。"""
+
+_CHAT_REPLY_PROJECT_INTENTS = {"ask_project", "interview_question"}
+_CHAT_REPLY_FILLABLE_FAST_INTENTS = {"ask_resume", "ask_availability", "schedule_interview"}
+_CHAT_REPLY_CANDIDATE_ROLES = {"me", "user", "candidate"}
+_CHAT_REPLY_HUMAN_ROLES = {"hr", *_CHAT_REPLY_CANDIDATE_ROLES}
+_CHAT_REPLY_DO_NOT_REPLY_TERMS = ["身份证", "银行卡", "验证码", "密码", "户口", "婚育", "结婚", "生育", "征信", "政治面貌"]
+_CHAT_REPLY_ONBOARDING_TERMS = ["到岗", "入职时间", "什么时候入职", "最快入职", "可入职", "入职日期", "离职了吗", "离职状态"]
+_CHAT_REPLY_LOCATION_RISK_TERMS = ["远程", "居家", "remote", "驻场", "外包", "派遣", "出差", "坐班", "大小周", "单双休", "搬到", "能来"]
+_CHAT_REPLY_QUOTE_TERMS = ["报价", "报个价", "预算", "单价", "时薪", "日薪", "外包价", "项目费用", "交付"]
+_CHAT_REPLY_TECH_TERMS = [
+    "rag",
+    "agent",
+    "llm",
+    "langgraph",
+    "langchain",
+    "fastapi",
+    "faiss",
+    "python",
+    "deepseek",
+    "api",
+    "检索",
+    "召回",
+    "重排",
+    "向量",
+    "知识库",
+    "智能体",
+    "大模型",
+    "项目",
+    "经历",
+    "经验",
+    "技术",
+    "架构",
+    "部署",
+    "评测",
+    "指标",
+    "优化",
+    "工程",
+]
+
+
+def build_chat_reply_draft(
+    hr_message: str = "",
+    conversation: list[dict[str, Any]] | None = None,
+    job_title: str = "",
+    company: str = "",
+    jd_text: str = "",
+    resume_text: str = "",
+    resume_profile: dict[str, Any] | None = None,
+    evidence_context: str = "",
+    evidence_sources: list[str] | None = None,
+    *,
+    latest_hr_message: str = "",
+    chat_history: list[dict[str, Any]] | None = None,
+    llm: Any | None = None,
+    llm_timeout_seconds: float = 4.0,
+) -> dict[str, Any]:
+    """Classify the HR message and return a RAG-ready, human-reviewed reply draft."""
+    started = time.perf_counter()
+    latest = _normalize_chat_reply_text(hr_message or latest_hr_message)
+    if not latest:
+        raise ValueError("hr_message 不能为空")
+
+    history = _normalize_chat_history(conversation if conversation is not None else chat_history)
+    last_human_role = _last_effective_human_message_role(history)
+    if last_human_role in _CHAT_REPLY_CANDIDATE_ROLES:
+        intent_info = classify_hr_reply_intent(latest, [])
+        return _chat_reply_no_action_result(intent_info, last_human_role, started)
+
+    sources = _normalize_evidence_sources(evidence_sources)
+    intent_info = classify_hr_reply_intent(latest, history)
+    intent = str(intent_info["intent"])
+    base_reason = str(intent_info.get("reason") or "")
+
+    if intent in _CHAT_REPLY_PROJECT_INTENTS:
+        result = _build_project_chat_reply(
+            intent=intent,
+            hr_message=latest,
+            job_title=job_title,
+            company=company,
+            jd_text=jd_text,
+            resume_text=resume_text,
+            resume_profile=resume_profile or {},
+            evidence_context=evidence_context,
+            evidence_sources=sources,
+            base_reason=base_reason,
+            llm=llm,
+            llm_timeout_seconds=llm_timeout_seconds,
+            started=started,
+        )
+    else:
+        result = _build_fast_chat_reply(intent, latest, intent_info, job_title=job_title, company=company)
+
+    if result.get("draft") and _chat_reply_draft_has_banned_commitment(str(result.get("draft") or "")):
+        result.update(
+            {
+                "risk_level": "high",
+                "should_fill": False,
+                "action_policy": "ask_user",
+                "reply_mode": "fallback",
+                "draft": "",
+                "reason": "草稿触发薪资、到岗、远程、报价或交付承诺护栏，已改为人工确认。",
+            }
+        )
+
+    result.setdefault("intent", intent)
+    result.setdefault("evidence_relation", "none")
+    result.setdefault("evidence", [])
+    result.setdefault("missing_evidence", [])
+    result.setdefault("risk_level", "medium")
+    result.setdefault("should_fill", False)
+    result.setdefault("action_policy", "ask_user")
+    result.setdefault("reply_mode", "fallback")
+    result.setdefault("draft", "")
+    result.setdefault("reason", base_reason)
+    result["duration_ms"] = int((time.perf_counter() - started) * 1000)
+    result["policy_version"] = CHAT_REPLY_POLICY_VERSION
+    return result
+
+
+def classify_hr_reply_intent(
+    hr_message: str,
+    conversation: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    latest = _normalize_chat_reply_text(hr_message)
+    if not latest:
+        raise ValueError("hr_message 不能为空")
+    context = _chat_reply_context_text(latest, conversation)
+
+    if _contains_any(latest, _CHAT_REPLY_DO_NOT_REPLY_TERMS):
+        return _chat_intent("unknown", 0.92, "涉及敏感个人信息，默认不生成回复。", risk_level="high", action_policy="do_not_reply")
+    if _contains_any(latest, ["期望薪资", "薪资期望", "薪资要求", "薪资", "薪酬", "薪水", "工资", "待遇", "到手", "多少钱"]):
+        return _chat_intent("salary", 0.9, "涉及薪资或待遇，不能替用户承诺薪资范围或接受条件。", risk_level="high")
+    if _contains_any(latest, _CHAT_REPLY_QUOTE_TERMS):
+        return _chat_intent("salary", 0.86, "涉及报价、预算或交付条件，不能替用户报价或承诺交付。", risk_level="high")
+    if _contains_any(latest, _CHAT_REPLY_ONBOARDING_TERMS):
+        return _chat_intent("ask_availability", 0.88, "涉及到岗或入职时间，需要用户按真实安排手动确认。", risk_level="high")
+    if _contains_any(latest, _CHAT_REPLY_LOCATION_RISK_TERMS) or re.search(r"(base|地点|城市).{0,12}(哪里|哪|接受|可以|方便|能)", latest, flags=re.I):
+        return _chat_intent("location", 0.82, "涉及地点、远程、驻场或工作制边界，不能替用户做决定。", risk_level="high")
+
+    if _is_interview_question_request(latest):
+        return _chat_intent("interview_question", 0.88, "HR 在追问技术、项目细节或面试题，只能基于证据生成简短承接。", risk_level="medium")
+    if _is_project_experience_request(context):
+        return _chat_intent("ask_project", 0.78, "HR 在确认项目、技术或经历，需要先检查 JD、简历和外部证据。", risk_level="medium")
+    if _contains_any(latest, ["面试", "电话面", "视频面", "线下面", "约个时间", "约时间", "约一下", "初面", "复试", "一面", "二面"]):
+        return _chat_intent("schedule_interview", 0.84, "HR 正在沟通面试安排，可用快速模板请求可选时间和形式。", risk_level="low")
+    if _contains_any(latest, ["简历", "附件", "作品集", "作品链接", "项目链接", "github", "gitee", "博客", "pdf"]):
+        return _chat_intent("ask_resume", 0.78, "HR 在索要简历或作品材料，可用短模板承接，但仍需用户确认附件或链接。", risk_level="low")
+    if _contains_any(latest, ["在吗", "在线吗", "方便聊", "方便沟通", "现在方便", "有时间聊", "可以聊", "电话沟通", "还在找", "还看机会", "感兴趣吗", "考虑吗"]):
+        return _chat_intent("ask_availability", 0.76, "HR 在确认是否方便沟通或是否还看机会，可用快速模板承接。", risk_level="low")
+
+    return _chat_intent("unknown", 0.45, "未识别为安全可自动填入的场景，建议人工确认。", risk_level="medium")
+
+
+def _chat_intent(
+    intent: str,
+    confidence: float,
+    reason: str,
+    *,
+    risk_level: str = "medium",
+    action_policy: str = "ask_user",
+) -> dict[str, Any]:
+    return {
+        "intent": intent,
+        "confidence": round(max(0.0, min(1.0, confidence)), 2),
+        "risk_level": risk_level if risk_level in {"low", "medium", "high"} else "medium",
+        "action_policy": action_policy if action_policy in {"fill_draft", "ask_user", "do_not_reply", "no_action"} else "ask_user",
+        "reason": reason,
+    }
+
+
+def _chat_reply_no_action_result(intent_info: dict[str, Any], last_human_role: str, started: float) -> dict[str, Any]:
+    role_label = {
+        "me": "me",
+        "user": "user",
+        "candidate": "candidate",
+    }.get(last_human_role, last_human_role)
+    return {
+        "intent": str(intent_info.get("intent") or "unknown"),
+        "evidence_relation": "none",
+        "evidence": [],
+        "missing_evidence": [],
+        "risk_level": "low",
+        "should_fill": False,
+        "action_policy": "no_action",
+        "reply_mode": "fast_template",
+        "duration_ms": int((time.perf_counter() - started) * 1000),
+        "draft": "",
+        "reason": f"用户已回复，避免重复回复；最后一条有效人类消息角色是 {role_label}。",
+        "confidence": intent_info.get("confidence", 0.5),
+        "policy_version": CHAT_REPLY_POLICY_VERSION,
+    }
+
+
+def _build_fast_chat_reply(
+    intent: str,
+    hr_message: str,
+    intent_info: dict[str, Any],
+    *,
+    job_title: str = "",
+    company: str = "",
+) -> dict[str, Any]:
+    risk_level = str(intent_info.get("risk_level") or "medium")
+    action_policy = str(intent_info.get("action_policy") or "ask_user")
+    draft = _chat_reply_template(intent, hr_message=hr_message, job_title=job_title, company=company)
+
+    if intent in _CHAT_REPLY_FILLABLE_FAST_INTENTS and risk_level == "low" and draft:
+        should_fill = True
+        action_policy = "fill_draft"
+        reply_mode = "fast_template"
+    elif action_policy == "do_not_reply":
+        should_fill = False
+        draft = ""
+        reply_mode = "fallback"
+    else:
+        should_fill = False
+        reply_mode = "fallback"
+
+    return {
+        "intent": intent,
+        "evidence_relation": "none",
+        "evidence": [],
+        "missing_evidence": _missing_evidence_for_fast_intent(intent, risk_level),
+        "risk_level": risk_level,
+        "should_fill": should_fill,
+        "action_policy": action_policy,
+        "reply_mode": reply_mode,
+        "draft": draft,
+        "reason": str(intent_info.get("reason") or ""),
+        "confidence": intent_info.get("confidence", 0.5),
+    }
+
+
+def _build_project_chat_reply(
+    *,
+    intent: str,
+    hr_message: str,
+    job_title: str = "",
+    company: str = "",
+    jd_text: str = "",
+    resume_text: str = "",
+    resume_profile: dict[str, Any] | None = None,
+    evidence_context: str = "",
+    evidence_sources: list[str] | None = None,
+    base_reason: str = "",
+    llm: Any | None = None,
+    llm_timeout_seconds: float = 4.0,
+    started: float = 0.0,
+) -> dict[str, Any]:
+    evidence_bundle = _collect_chat_reply_evidence(
+        hr_message=hr_message,
+        jd_text=jd_text,
+        resume_text=resume_text,
+        resume_profile=resume_profile or {},
+        evidence_context=evidence_context,
+        evidence_sources=evidence_sources or [],
+    )
+    relation = str(evidence_bundle["relation"])
+    evidence = list(evidence_bundle["evidence"])
+    missing = list(evidence_bundle["missing_evidence"])
+
+    if relation == "none":
+        return {
+            "intent": intent,
+            "evidence_relation": relation,
+            "evidence": [],
+            "missing_evidence": missing,
+            "risk_level": "high",
+            "should_fill": False,
+            "action_policy": "ask_user",
+            "reply_mode": "fallback",
+            "draft": "这个问题需要结合我的真实项目细节确认后回复。",
+            "reason": "JD、简历和外部证据都不足，不能编造项目或技术细节。",
+        }
+
+    if relation == "jd_only":
+        return {
+            "intent": intent,
+            "evidence_relation": relation,
+            "evidence": evidence,
+            "missing_evidence": missing,
+            "risk_level": "medium",
+            "should_fill": False,
+            "action_policy": "ask_user",
+            "reply_mode": "fallback",
+            "draft": "这点我需要结合自己的真实项目经历再确认后回复。",
+            "reason": "JD 有相关要求，但简历和外部证据不足，不能把 JD 要求当成候选人经历。",
+        }
+
+    draft = _local_evidence_chat_reply(intent, hr_message, evidence, relation, job_title=job_title, company=company)
+    reply_mode = "rag_llm"
+    reason = _evidence_reply_reason(relation, base_reason)
+
+    if _use_chat_reply_llm() and llm is not False:
+        remaining = max(0.1, min(float(llm_timeout_seconds), 4.0) - (time.perf_counter() - started))
+        try:
+            active_llm = llm if llm is not None else make_chat_model(json_mode=True, timeout=remaining, max_retries=0)
+            llm_draft = _generate_chat_reply_with_llm(
+                active_llm,
+                intent=intent,
+                hr_message=hr_message,
+                job_title=job_title,
+                company=company,
+                evidence=evidence,
+                timeout_seconds=remaining,
+            )
+            if llm_draft:
+                draft = llm_draft
+        except Exception:
+            reply_mode = "fallback"
+            draft = _local_evidence_chat_reply(intent, hr_message, evidence, relation, job_title=job_title, company=company)
+            reason = reason + " LLM 生成失败或超时，已使用本地证据模板兜底。"
+
+    return {
+        "intent": intent,
+        "evidence_relation": relation,
+        "evidence": evidence,
+        "missing_evidence": missing,
+        "risk_level": "medium",
+        "should_fill": True,
+        "action_policy": "fill_draft",
+        "reply_mode": reply_mode,
+        "draft": draft,
+        "reason": reason,
+    }
+
+
+def _collect_chat_reply_evidence(
+    *,
+    hr_message: str,
+    jd_text: str = "",
+    resume_text: str = "",
+    resume_profile: dict[str, Any] | None = None,
+    evidence_context: str = "",
+    evidence_sources: list[str] | None = None,
+) -> dict[str, Any]:
+    keywords = _chat_reply_keywords(hr_message)
+    jd_has_context = bool(_normalize_chat_reply_text(jd_text))
+    jd_evidence = _evidence_from_text(jd_text, "jd_text", keywords, relation="jd", limit=2)
+    resume_evidence = _evidence_from_resume(resume_text, resume_profile or {}, keywords, limit=3)
+    rag_evidence = _evidence_from_text(
+        evidence_context,
+        _primary_evidence_source(evidence_sources),
+        keywords,
+        relation="rag",
+        limit=3,
+    )
+
+    if rag_evidence:
+        relation = "rag_supported"
+        evidence = (jd_evidence[:1] if jd_evidence else []) + rag_evidence[:3] + resume_evidence[:1]
+    elif jd_has_context and resume_evidence:
+        relation = "jd_and_resume"
+        evidence = (jd_evidence[:1] if jd_evidence else []) + resume_evidence[:3]
+    elif jd_has_context:
+        relation = "jd_only"
+        evidence = jd_evidence[:2] if jd_evidence else [{"source": "jd_text", "relation": "jd", "text": _compact_evidence(jd_text, 120)}]
+    elif resume_evidence:
+        relation = "resume_only"
+        evidence = resume_evidence[:3]
+    else:
+        relation = "none"
+        evidence = []
+
+    missing: list[str] = []
+    if not jd_has_context:
+        missing.append("岗位 JD 要求")
+    if relation in {"jd_only", "none"}:
+        missing.append("简历或项目知识库中的可验证经历证据")
+    if relation == "none":
+        missing.append("可用于简短回复的项目/技术事实")
+    return {
+        "relation": relation,
+        "evidence": _dedupe_evidence(evidence)[:5],
+        "missing_evidence": _dedupe_strings(missing),
+    }
+
+
+def _generate_chat_reply_with_llm(
+    llm: Any,
+    *,
+    intent: str,
+    hr_message: str,
+    job_title: str = "",
+    company: str = "",
+    evidence: list[dict[str, str]] | None = None,
+    timeout_seconds: float = 4.0,
+) -> str:
+    _ = timeout_seconds
+    data = _invoke_json(
+        llm,
+        CHAT_REPLY_LLM_PROMPT,
+        json.dumps(
+            {
+                "intent": intent,
+                "hr_message": hr_message,
+                "job_title": job_title,
+                "company": company,
+                "evidence": evidence or [],
+            },
+            ensure_ascii=False,
+        ),
+    )
+    draft = _sanitize_chat_reply_draft(data.get("draft", ""), max_chars=100)
+    return draft if draft and not _chat_reply_draft_has_banned_commitment(draft) else ""
+
+
+def _use_chat_reply_llm() -> bool:
+    value = _env_value("JOB_ACCELERATOR_CHAT_REPLY_LLM", "CHAT_REPLY_LLM").lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _local_evidence_chat_reply(
+    intent: str,
+    hr_message: str,
+    evidence: list[dict[str, str]],
+    relation: str,
+    *,
+    job_title: str = "",
+    company: str = "",
+) -> str:
+    _ = (hr_message, relation, job_title, company)
+    phrase = _chat_evidence_phrase(evidence)
+    if intent == "interview_question":
+        if phrase:
+            return _sanitize_chat_reply_draft(f"这个问题我可以结合{phrase}在面试中展开讲，先从背景、实现路径、结果和边界四部分说明。", max_chars=110)
+        return "这个问题我需要结合真实项目细节确认后回复。"
+    if phrase:
+        return _sanitize_chat_reply_draft(f"这块我有相关项目经验，可以结合{phrase}简要说明，具体实现和取舍我可以在面试中展开。", max_chars=110)
+    return "这块我需要结合自己的真实项目经历再确认后回复。"
+
+
+def _evidence_reply_reason(relation: str, base_reason: str) -> str:
+    prefix = base_reason.rstrip("。")
+    relation_reasons = {
+        "rag_supported": "已使用请求体传入的 evidence_context/evidence_sources 作为 RAG-ready 外部证据；当前不接真实 RAG 检索。",
+        "jd_and_resume": "JD 和简历画像/简历文本都有相关证据，可以生成短草稿。",
+        "resume_only": "JD 未提供相关要求，但简历或项目证据可支持简短回复。",
+    }
+    detail = relation_reasons.get(relation, "已按本地证据护栏生成回复。")
+    return f"{prefix}。{detail}" if prefix else detail
+
+
+def _chat_reply_template(
+    intent: str,
+    *,
+    hr_message: str = "",
+    job_title: str = "",
+    company: str = "",
+) -> str:
+    _ = (hr_message, job_title, company)
+    templates = {
+        "ask_resume": "您好，可以的。我确认合适的简历版本和材料后发您。",
+        "ask_availability": "您好，在的，可以先文字沟通。您这边想先确认哪部分信息？",
+        "schedule_interview": "您好，可以沟通。麻烦您发一下可选时间段、面试形式和预计时长，我确认后回复您。",
+        "salary": "",
+        "location": "",
+        "unknown": "",
+    }
+    return _sanitize_chat_reply_draft(templates.get(intent, ""))
+
+
+def _missing_evidence_for_fast_intent(intent: str, risk_level: str) -> list[str]:
+    if risk_level == "high":
+        if intent == "salary":
+            return ["用户确认后的薪资范围/底线", "岗位薪资结构"]
+        if intent == "location":
+            return ["用户确认后的城市、通勤、远程或驻场边界"]
+        if intent == "ask_availability":
+            return ["用户确认后的到岗/入职安排"]
+        return ["用户人工确认"]
+    if intent == "ask_resume":
+        return ["用户确认后的简历版本或作品链接"]
+    return []
+
+
+def _normalize_chat_reply_text(text: Any) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip(" 「」\"'")
+
+
+def _normalize_chat_history(conversation: list[dict[str, Any]] | None) -> list[dict[str, str]]:
+    history: list[dict[str, str]] = []
+    for item in conversation or []:
+        if not isinstance(item, dict):
+            continue
+        role = _normalize_chat_role(item.get("role"))
+        content = _normalize_chat_reply_text(item.get("content"))
+        if not content:
+            continue
+        history.append({"role": role, "content": content})
+    return history[-20:]
+
+
+def _normalize_chat_role(role: Any) -> str:
+    value = str(role or "other").strip().lower()
+    if value in {"hr", "recruiter", "boss", "interviewer", "company"}:
+        return "hr"
+    if value in {"me", "myself", "self"}:
+        return "me"
+    if value in {"user"}:
+        return "user"
+    if value in {"candidate", "applicant", "jobseeker", "job_seeker"}:
+        return "candidate"
+    if value == "system":
+        return "system"
+    return "other"
+
+
+def _last_effective_human_message_role(history: list[dict[str, str]]) -> str:
+    for item in reversed(history):
+        role = str(item.get("role") or "other")
+        if role in _CHAT_REPLY_HUMAN_ROLES:
+            return role
+    return ""
+
+
+def _normalize_evidence_sources(evidence_sources: list[str] | None) -> list[str]:
+    sources: list[str] = []
+    for item in evidence_sources or []:
+        text = re.sub(r"\s+", " ", str(item or "")).strip()
+        if text and text not in sources:
+            sources.append(text[:80])
+    return sources[:10]
+
+
+def _primary_evidence_source(evidence_sources: list[str] | None) -> str:
+    sources = _normalize_evidence_sources(evidence_sources)
+    return sources[0] if sources else "evidence_context"
+
+
+def _chat_reply_context_text(latest: str, conversation: list[dict[str, Any]] | None = None) -> str:
+    parts = [latest]
+    for item in _normalize_chat_history(conversation)[-5:]:
+        parts.append(str(item.get("content") or ""))
+    return " ".join(parts)
+
+
+def _is_interview_question_request(text: str) -> bool:
+    clean = _normalize_chat_reply_text(text)
+    if not clean:
+        return False
+    assignment_terms = ["笔试题", "测试题", "作业", "命题", "完整方案", "代码题", "写一段代码", "给一份方案"]
+    if _contains_any(clean, assignment_terms):
+        return True
+    if _contains_any(clean, ["详细讲", "详细说", "详细介绍", "介绍一下自己", "自我介绍"]):
+        return True
+    if _contains_any(clean, ["讲讲", "讲一下", "说说", "说一下", "介绍一下", "介绍下"]) and _contains_any(clean, ["项目", "经历", "经验", "技术", "方案", "架构", "rag", "agent", "工具调用", "召回"]):
+        return True
+    question_marks = clean.count("?") + clean.count("？")
+    if question_marks >= 2 and _contains_any(clean, ["项目", "技术", "实现", "方案", "经验", "为什么", "怎么", "原理"]):
+        return True
+    if _contains_any(clean, ["怎么做", "怎么处理", "如何处理"]) and _contains_any(clean, ["项目", "技术", "实现", "方案", "经验", "rag", "agent", "工具调用", "召回", "优化"]):
+        return True
+    if len(clean) >= 48 and _contains_any(clean, ["如何实现", "怎么实现", "怎么处理", "系统设计", "架构", "原理", "源码", "难点", "亮点", "优化", "算法", "设计一个"]):
+        return True
+    return False
+
+
+def _is_project_experience_request(text: str) -> bool:
+    clean = _normalize_chat_reply_text(text)
+    if not clean:
+        return False
+    project_terms = ["项目", "经历", "经验", "做过", "熟悉", "会不会", "用过", "技术栈", "作品", "案例"]
+    tech_terms = [term for term in _CHAT_REPLY_TECH_TERMS if term not in {"项目", "经历", "经验", "技术"}]
+    return _contains_any(clean, project_terms) and _contains_any(clean, tech_terms)
+
+
+def _chat_reply_keywords(text: str) -> list[str]:
+    lower = _normalize_chat_reply_text(text).lower()
+    keywords: list[str] = []
+    for term in _CHAT_REPLY_TECH_TERMS:
+        if term.lower() in lower:
+            keywords.append(term)
+    for token in re.findall(r"[A-Za-z][A-Za-z0-9+#.-]{1,30}", text):
+        normalized = token.strip()
+        if normalized and normalized.lower() not in {item.lower() for item in keywords}:
+            keywords.append(normalized)
+    return keywords[:12] or ["项目", "经验", "技术"]
+
+
+def _evidence_from_text(
+    text: str,
+    source: str,
+    keywords: list[str],
+    *,
+    relation: str,
+    limit: int = 2,
+) -> list[dict[str, str]]:
+    clean_text = str(text or "").strip()
+    if not clean_text:
+        return []
+    chunks = _split_evidence_chunks(clean_text)
+    picked: list[dict[str, str]] = []
+    for chunk in chunks:
+        if _contains_any(chunk, keywords):
+            picked.append({"source": source, "relation": relation, "text": _compact_evidence(chunk, 140)})
+        if len(picked) >= limit:
+            break
+    if not picked and chunks and relation == "rag":
+        picked.append({"source": source, "relation": relation, "text": _compact_evidence(chunks[0], 140)})
+    return picked[:limit]
+
+
+def _evidence_from_resume(
+    resume_text: str,
+    resume_profile: dict[str, Any],
+    keywords: list[str],
+    *,
+    limit: int = 3,
+) -> list[dict[str, str]]:
+    evidence: list[dict[str, str]] = []
+    if isinstance(resume_profile, dict) and resume_profile:
+        skills = resume_profile.get("skills", {}) if isinstance(resume_profile.get("skills"), dict) else {}
+        groups = [skills.get("must_have") or [], skills.get("familiar") or [], resume_profile.get("projects") or []]
+        for group in groups:
+            for item in group:
+                if not isinstance(item, dict):
+                    continue
+                text = " ".join(
+                    str(item.get(key) or "")
+                    for key in ["skill", "name", "level", "evidence", "description", "project"]
+                )
+                keywords_text = " ".join(str(value) for value in item.get("keywords", []) or [])
+                text = f"{text} {keywords_text}".strip()
+                if text and _contains_any(text, keywords):
+                    evidence.append({"source": "resume_profile", "relation": "resume", "text": _compact_evidence(text, 140)})
+                if len(evidence) >= limit:
+                    return evidence
+    evidence.extend(_evidence_from_text(resume_text, "resume_text", keywords, relation="resume", limit=limit - len(evidence)))
+    return evidence[:limit]
+
+
+def _split_evidence_chunks(text: str) -> list[str]:
+    normalized = str(text or "").replace("\r", "\n")
+    chunks: list[str] = []
+    for line in normalized.splitlines():
+        clean = re.sub(r"\s+", " ", line).strip(" -#*，。；;")
+        if not clean:
+            continue
+        if len(clean) <= 180:
+            chunks.append(clean)
+            continue
+        parts = [part.strip(" ，。；;") for part in re.split(r"[。；;]", clean) if part.strip(" ，。；;")]
+        chunks.extend(parts or [clean[:180]])
+    return chunks[:50]
+
+
+def _chat_evidence_phrase(evidence: list[dict[str, str]]) -> str:
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        if item.get("relation") == "jd":
+            continue
+        text = _compact_evidence(str(item.get("text") or ""), 52)
+        if text:
+            return f"“{text}”"
+    if evidence:
+        text = _compact_evidence(str(evidence[0].get("text") or ""), 52)
+        if text:
+            return f"“{text}”"
+    return ""
+
+
+def _sanitize_chat_reply_draft(message: Any, max_chars: int = 120) -> str:
+    clean = _normalize_chat_reply_text(message)
+    clean = re.sub(r"[。！？!?]{2,}", "。", clean)
+    clean = re.sub(r"^(当然可以|没问题)[，,。！!]*", "", clean).strip()
+    if len(clean) > max_chars:
+        clean = clean[: max_chars - 1].rstrip(" ，。；;") + "。"
+    return clean
+
+
+def _chat_reply_draft_has_banned_commitment(message: str) -> bool:
+    clean = _normalize_chat_reply_text(message)
+    banned_patterns = [
+        r"(期望薪资|薪资期望|薪资要求|最低薪资|薪资).{0,24}(可以|接受|没问题|确定|不低于|以上)",
+        r"(可以|能|最快|确定).{0,20}(到岗|入职)",
+        r"(接受|可以|能).{0,12}(远程|居家|驻场|外包|派遣|出差|大小周|单双休)",
+        r"(报价|预算|单价|时薪|日薪).{0,24}(可以|接受|确定|没问题)",
+        r"(可以|能够|保证|承诺).{0,18}(交付|上线|完成|入职|到岗)",
+    ]
+    return any(re.search(pattern, clean, flags=re.I) for pattern in banned_patterns)
+
+
+def _dedupe_evidence(evidence: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen: set[str] = set()
+    result: list[dict[str, str]] = []
+    for item in evidence:
+        text = _compact_evidence(str(item.get("text") or ""), 160)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(
+            {
+                "source": str(item.get("source") or "unknown")[:80],
+                "relation": str(item.get("relation") or "unknown")[:40],
+                "text": text,
+            }
+        )
+    return result
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def resume_profile_from_text(resume_text: str, llm: Any | None = None) -> dict[str, Any]:
+    """Extract a reusable skills profile from resume text."""
+    resume_text = (resume_text or "").strip()
+    if not resume_text:
+        raise ValueError("resume_text 不能为空")
+    active_llm = None if llm is False else (llm if llm is not None else _make_llm())
+    resume_llm = active_llm if _use_llm_resume_extractor() else None
+    profile = _get_resume_skills_profile(resume_text, resume_llm)
+    if not profile:
+        raise ValueError("没有从简历中提取到有效技能")
+    return profile
+
+
 def match_jd(
     jd_text: str,
     resume_text: str = "",
     skills_profile: dict[str, Any] | None = None,
     skills_path: str | Path | None = None,
     llm: Any | None = None,
+    llm_opening: bool | None = None,
+    include_trace: bool = False,
 ) -> dict[str, Any]:
     """运行 JD拆解员 -> 技能匹配员，并返回 MatchReport 字典。"""
     jd_text = (jd_text or "").strip()
@@ -1646,35 +2884,57 @@ def match_jd(
         raise ValueError("jd_text 不能为空")
     profile = skills_profile or load_skills_profile(skills_path)
     active_llm = None if llm is False else (llm if llm is not None else _make_llm())
+    trace: dict[str, Any] = {
+        "llm_available": active_llm is not None,
+        "llm_matcher_called": False,
+        "llm_opening_called": False,
+        "llm_resume_extractor_allowed": False,
+        "llm_resume_extractor_called": False,
+        "llm_min_score": _llm_min_score(),
+    }
     resume_text = (resume_text or "").strip()
     if resume_text:
         try:
             resume_llm = active_llm if _use_llm_resume_extractor() else None
+            trace["llm_resume_extractor_allowed"] = _use_llm_resume_extractor()
+            trace["llm_resume_extractor_called"] = resume_llm is not None
             resume_profile = _get_resume_skills_profile(resume_text, resume_llm)
             if resume_profile:
                 profile = resume_profile
         except Exception:
-            pass
+            trace["resume_profile_error"] = "resume profile extraction failed"
 
     report = _local_match_report(jd_text, profile)
     local_score = _coerce_score(report.get("match_score", 0))
     should_call_llm = active_llm is not None and local_score >= _llm_min_score()
+    trace["local_score"] = local_score
+    trace["should_call_llm"] = should_call_llm
+    trace["jd_skills"] = summarize_jd_skills(jd_text)
+    trace["resume_skills"] = summarize_resume_skills(skills_profile=profile)
 
     if should_call_llm and _use_llm_matcher():
+        trace["llm_matcher_called"] = True
         graph = build_match_graph(active_llm, use_llm_jd_decomposer=_use_llm_jd_decomposer())
         state = graph.invoke({"jd_text": jd_text, "skills_profile": profile})
         report = _model_dump(_model_validate(MatchReport, state["report"]))  # type: ignore[arg-type]
         report = _apply_score_guardrails(report, jd_text, profile)
+        trace["llm_matcher_result"] = report
 
-    if should_call_llm:
-        opening_message = _generate_opening_with_llm(report, profile, jd_text, active_llm)
+    use_llm_opening = _use_llm_opening() if llm_opening is None else bool(llm_opening)
+    if should_call_llm and use_llm_opening:
+        opening_message = _generate_opening_with_llm(report, profile, jd_text, active_llm, trace=trace)
         report["opening_message"] = opening_message or generate_opening(report, profile, jd_text)
     else:
         if active_llm is not None:
             suggestions = list(report.get("suggestions") or [])
-            suggestions.insert(0, f"本地快筛低于 {_llm_min_score()} 分，未调用 LLM 生成开场白。")
+            if should_call_llm and not use_llm_opening:
+                suggestions.insert(0, "海投模式优先保证速度，未调用 LLM 生成开场白。")
+            else:
+                suggestions.insert(0, f"本地快筛低于 {_llm_min_score()} 分，未调用 LLM 生成开场白。")
             report["suggestions"] = suggestions[:5]
         report["opening_message"] = generate_opening(report, profile, jd_text)
+    if include_trace:
+        report["_trace"] = trace
     return report
 
 
