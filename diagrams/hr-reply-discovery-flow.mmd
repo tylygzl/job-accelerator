@@ -1,0 +1,30 @@
+flowchart TD
+  A{"扫描怎样触发？"}
+  A -->|用户点击检查| B["当前页面 content script"]
+  A -->|后台 alarm| C["查找已有 BOSS 消息页标签"]
+  C --> D{"消息页存在且页面空闲？"}
+  D -->|否| E["本轮跳过<br/>不跳页、不抢海投"]
+  D -->|是| B
+  E --> F["重新调度<br/>成功或忙碌 1 分钟<br/>无标签 3 分钟<br/>失败指数退避至 15 分钟"]
+
+  B --> G["读取可见会话卡"]
+  G --> H{"可信未读证据？"}
+  H -->|否| I["拒绝入队<br/>记录诊断原因"]
+  H -->|是| J{"稳定会话标识<br/>最新消息来自 HR<br/>且有有效文本？"}
+  J -->|否| I
+  J -->|是| K["生成会话指纹与消息指纹"]
+  K --> L["与旧队列合并去重"]
+  L --> M["保存 pending 队列"]
+  M --> N["更新角标、popup 与侧栏"]
+
+  O["海投运行中"] -.只允许记录与提醒.-> B
+  O -.禁止跳转或填草稿.-> E
+
+  classDef start fill:#fff4cc,stroke:#a36a00,color:#3d2a00;
+  classDef process fill:#e8f8ee,stroke:#2f7d4a,color:#123820;
+  classDef reject fill:#ffe9e9,stroke:#ad3f3f,color:#4b1717;
+  classDef infra fill:#e8f1ff,stroke:#3268a8,color:#122a46;
+  class A start;
+  class B,G,H,J,K,L,M,N process;
+  class D,C,F infra;
+  class E,I,O reject;

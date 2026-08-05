@@ -1,0 +1,36 @@
+flowchart LR
+  U["用户先在 BOSS 设置筛选条件"] --> P["插件配置<br/>简历、阈值、目标、投递模式"]
+  P --> M{"当前 BOSS 页面"}
+
+  M -->|岗位页| J1["读取岗位卡与右侧 JD"]
+  J1 --> J2["岗位匹配<br/>快速规则或智能分析"]
+  J2 --> J3{"达标且当前可操作？"}
+  J3 -->|否| J4["缓存结果、跳过或继续扫描"]
+  J3 -->|是| J5["点击立即沟通<br/>识别 BOSS 结果弹窗"]
+  J5 --> J6["选择留在此页<br/>记录完成并处理下一岗位"]
+  J4 --> J1
+  J6 --> J1
+
+  M -->|消息或聊天页| R1["手动检查或后台低频检查"]
+  R1 --> R2["发现可信 HR 未读<br/>去重加入待回复队列"]
+  R2 --> R3["角标和侧栏提醒"]
+  R3 --> R4["用户点击处理回复"]
+  R4 --> R5["定位并复验会话<br/>生成并填入回复草稿"]
+  R5 --> R6["用户检查后手动发送"]
+
+  L["同一标签页全局任务锁<br/>手动操作 > HR 回复 > 海投"] -.约束.-> J1
+  L -.约束.-> R4
+  S["chrome.storage.local<br/>配置、缓存、状态、待回复队列"] <--> J4
+  S <--> R2
+  B["MV3 后台<br/>定时唤醒、退避、角标、后端转发"] --> R1
+
+  classDef user fill:#fff4cc,stroke:#a36a00,color:#3d2a00;
+  classDef job fill:#e8f1ff,stroke:#3268a8,color:#122a46;
+  classDef reply fill:#e8f8ee,stroke:#2f7d4a,color:#123820;
+  classDef guard fill:#ffe9e9,stroke:#ad3f3f,color:#4b1717;
+  classDef infra fill:#f0f1f5,stroke:#636b78,color:#22252b;
+  class U,P,M user;
+  class J1,J2,J3,J4,J5,J6 job;
+  class R1,R2,R3,R4,R5,R6 reply;
+  class L guard;
+  class S,B infra;
