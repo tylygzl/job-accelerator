@@ -16,3 +16,4 @@ tests/manual_eval_results.csv
 server.out.log
 server.err.log
 .DS_Store
+.gstack/

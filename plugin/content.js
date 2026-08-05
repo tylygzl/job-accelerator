@@ -2,6 +2,9 @@
 (function () {
   "use strict";
 
+  const HR_REPLY_DISCOVERY_QUEUE_LIMIT = 30;
+  const HR_REPLY_DISCOVERY = window.HRReplyDiscovery || null;
+
   const PLUGIN_CONFIG = window.JOB_ACCELERATOR_CONFIG || {};
   const CLOUD_DEFAULT_API = "http://121.196.231.160/job-accelerator/match";
   const DEFAULT_API = normalizeApiUrl(PLUGIN_CONFIG.DEFAULT_API || CLOUD_DEFAULT_API, CLOUD_DEFAULT_API);
@@ -24,7 +27,7 @@
   const AUTO_APPLY_KEY = "job_accelerator_auto_apply";
   const BOSS_CHAT_URL = "https://www.zhipin.com/web/geek/chat";
   const MATCH_CACHE_LIMIT = 500;
-  const HR_REPLY_QUEUE_LIMIT = 30;
+  const HR_REPLY_QUEUE_LIMIT = HR_REPLY_DISCOVERY_QUEUE_LIMIT;
   const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
   const AUTO_OPEN_TTL_MS = 2 * 60 * 1000;
   const AUTO_APPLY_TTL_MS = 4 * 60 * 60 * 1000;
@@ -38,7 +41,6 @@
   const AUTO_LOOP_STEP_DELAY_MS = 700;
   const AUTO_LOOP_MAX_ROUNDS = 60;
   const AUTO_LOOP_IDLE_ROUNDS = 2;
-  const HR_REPLY_SCAN_INTERVAL_MS = 8 * 1000;
   const DETAIL_SCAN_TIMEOUT_MS = 5 * 1000;
   const DETAIL_SCAN_INTERVAL_MS = 200;
   const DETAIL_SCAN_COOLDOWN_MS = 1000;
@@ -93,7 +95,7 @@
   let autoApplyArmed = false;
   let sentDialogGuardRunning = false;
   let hrReplyProcessing = false;
-  let hrReplyWatcherStarted = false;
+  let hrReplyScheduledScanRunning = false;
   let debugHrReplyEnabled = false;
   let debugFlagLoadState = "idle";
   let debugFlagLoadAttempt = 0;
@@ -108,6 +110,15 @@
     lastError: "",
     lastRequestId: "",
     pendingHrQueueCount: 0,
+    hrReplyDiscoveryDiagnostics: {
+      cardCount: 0,
+      queuedCount: 0,
+      rejectedCount: 0,
+      rejectReasons: "",
+      unreadSources: "",
+      singleCardUnreadCount: 0,
+      numericUnreadMissingStableHintCount: 0,
+    },
     chatMessageDiagnostics: {
       messageNodeCount: 0,
       messageContainerCount: 0,
@@ -127,7 +138,6 @@
   hydrateStatuses().catch(() => {});
   autoFillPendingChat().catch(() => {});
   watchChatRoute();
-  startHrReplyQueueWatcher();
   loadDebugHrReplyFlag().catch(() => {});
   resumeHrReplyTaskIfNeeded().catch(() => {});
 
@@ -159,6 +169,12 @@
       scanHrReplyQueue({ source: "popup", render: true })
         .then((result) => sendResponse(result))
         .catch((error) => sendResponse({ ok: false, error: error?.message || String(error) }));
+      return true;
+    }
+    if (request.action === "hrReply.scheduledScan") {
+      runScheduledHrReplyScan()
+        .then((result) => sendResponse(result))
+        .catch((error) => sendResponse({ ok: false, reason: "scan_failed", error: error?.message || String(error) }));
       return true;
     }
     if (request.action === "hrReply.processItem") {
@@ -470,6 +486,13 @@
       `debugHrReplyEnabled: ${debugHrReplyEnabled}`,
       `debugFlagLoadState: ${debugFlagLoadState}${debugFlagLoadAttempt ? ` (${debugFlagLoadAttempt}/${DEBUG_FLAG_READ_MAX_ATTEMPTS})` : ""}`,
       `pendingHrQueueCount: ${runtimeState.pendingHrQueueCount || 0}`,
+      `hrDiscoveryCards: ${runtimeState.hrReplyDiscoveryDiagnostics?.cardCount || 0}`,
+      `hrDiscoveryQueued: ${runtimeState.hrReplyDiscoveryDiagnostics?.queuedCount || 0}`,
+      `hrDiscoveryRejected: ${runtimeState.hrReplyDiscoveryDiagnostics?.rejectedCount || 0}`,
+      `hrDiscoveryRejectReasons: ${runtimeState.hrReplyDiscoveryDiagnostics?.rejectReasons || "-"}`,
+      `hrDiscoveryUnreadSources: ${runtimeState.hrReplyDiscoveryDiagnostics?.unreadSources || "-"}`,
+      `hrDiscoverySingleCardUnread: ${runtimeState.hrReplyDiscoveryDiagnostics?.singleCardUnreadCount || 0}`,
+      `hrDiscoveryNumericUnreadMissingStableHint: ${runtimeState.hrReplyDiscoveryDiagnostics?.numericUnreadMissingStableHintCount || 0}`,
       `messageContainerCount: ${messageDiagnostics.messageContainerCount || 0}`,
       `visibleMessageContainerCount: ${messageDiagnostics.visibleMessageContainerCount || 0}`,
       `candidateMessageContainerCount: ${messageDiagnostics.candidateMessageContainerCount || 0}`,
@@ -535,9 +558,7 @@
   function acquireTaskLock(owner, options = {}) {
     const priority = taskPriority(owner);
     const now = Date.now();
-    if (taskLock && now - Number(taskLock.acquiredAt || 0) > TASK_LOCK_STALE_MS) {
-      taskLock = null;
-    }
+    clearStaleTaskLock(now);
     if (!taskLock) {
       const token = makeTaskToken(owner);
       taskLock = {
@@ -549,6 +570,9 @@
       };
       renderRuntimeState();
       return { ok: true, owner, token };
+    }
+    if (taskLock.owner === owner && owner === "hr_reply") {
+      return { ok: false, current: taskLock };
     }
     if (taskLock.owner === owner) {
       return { ok: true, owner, token: taskLock.token, reentrant: true };
@@ -567,6 +591,26 @@
       return { ok: true, owner, token, preempted };
     }
     return { ok: false, current: taskLock };
+  }
+
+  function clearStaleTaskLock(now = Date.now()) {
+    if (
+      !taskLock
+      || taskLockOwnerIsActive(taskLock.owner)
+      || now - Number(taskLock.acquiredAt || 0) <= TASK_LOCK_STALE_MS
+    ) return false;
+    taskLock = null;
+    renderRuntimeState();
+    return true;
+  }
+
+  function taskLockOwnerIsActive(owner) {
+    if (owner === "hr_reply") return hrReplyProcessing;
+    if (owner === "auto_apply") {
+      return autoApplyLoopRunning || autoApplyInProgress || analyzing || scanningMore;
+    }
+    if (owner === "job_scan") return analyzing || scanningMore;
+    return false;
   }
 
   function releaseTaskLock(lock) {
@@ -1608,6 +1652,7 @@ ${runtimeStateHtml()}
     if (options.scan) await scanHrReplyQueue({ source: "popup_state", render: false });
     const items = await storageGet([HR_REPLY_QUEUE_KEY]);
     const queue = normalizeHrReplyQueue(items[HR_REPLY_QUEUE_KEY]);
+    const message = appendHrReplyDiscoveryDiagnostics(hrReplyStateMessage(queue));
     return {
       ok: true,
       mode: getBossPageMode(),
@@ -1616,7 +1661,8 @@ ${runtimeStateHtml()}
       queue,
       lock: taskLockSnapshot(),
       autoApplyActive: isAutoApplyBusy(),
-      message: hrReplyStateMessage(queue),
+      discovery: discoveryDiagnosticsSnapshot(),
+      message,
     };
   }
 
@@ -1630,18 +1676,75 @@ ${runtimeStateHtml()}
       return { ...state, ok: true, message };
     }
 
+    if (!HR_REPLY_DISCOVERY) {
+      const baseMessage = "HR 未读发现模块未加载；可继续手动处理当前会话，海投功能不受影响。";
+      runtimeState.hrReplyDiscoveryDiagnostics = {
+        cardCount: 0,
+        queuedCount: 0,
+        rejectedCount: 0,
+        rejectReasons: "module_missing:1",
+        unreadSources: "",
+        singleCardUnreadCount: 0,
+        numericUnreadMissingStableHintCount: 0,
+      };
+      const message = appendHrReplyDiscoveryDiagnostics(baseMessage);
+      const state = await getHrReplyState({ scan: false });
+      if (options.render || panelMode === "chat") await renderChatAssistant(message);
+      return { ...state, ok: false, discoveryUnavailable: true, message };
+    }
+
     const cards = await waitForConversationCards();
-    const fresh = cards
-      .map((card, index) => extractHrReplyQueueItem(card, index))
-      .filter((item) => item && item.shouldQueue);
-    const stored = await storageGet([HR_REPLY_QUEUE_KEY]);
-    const queue = mergeHrReplyQueue(stored[HR_REPLY_QUEUE_KEY], fresh);
-    await storageSet({ [HR_REPLY_QUEUE_KEY]: queue });
+    const discovered = cards.map((card, index) => extractHrReplyQueueItem(card, index, cards));
+    const fresh = discovered.filter((item) => item?.shouldQueue);
+    const rejected = discovered.filter((item) => item && !item.shouldQueue);
+    const rejectCounts = rejected.reduce((counts, item) => {
+      const reason = item.reject_reason || "unknown";
+      counts[reason] = (counts[reason] || 0) + 1;
+      return counts;
+    }, {});
+    const sourceCounts = discovered.reduce((counts, item) => {
+      const source = item?.unreadEvidenceSource || "none";
+      counts[source] = (counts[source] || 0) + 1;
+      return counts;
+    }, {});
+    const singleCardUnreadCount = discovered.filter((item) => (
+      item?.unreadEvidenceSource && item.unreadEvidenceSource !== "none"
+    )).length;
+    const numericUnreadMissingStableHintCount = discovered.filter((item) => (
+      /numeric/.test(item?.unreadEvidenceSource || "")
+      && item?.reject_reason === "missing_stable_hint"
+    )).length;
+    runtimeState.hrReplyDiscoveryDiagnostics = {
+      cardCount: cards.length,
+      queuedCount: fresh.length,
+      rejectedCount: rejected.length,
+      rejectReasons: Object.entries(rejectCounts).map(([reason, count]) => `${reason}:${count}`).join(","),
+      unreadSources: Object.entries(sourceCounts).map(([source, count]) => `${source}:${count}`).join(","),
+      singleCardUnreadCount,
+      numericUnreadMissingStableHintCount,
+    };
+    const stored = await storageGetChecked([HR_REPLY_QUEUE_KEY]);
+    if (!stored.ok) {
+      const message = appendHrReplyDiscoveryDiagnostics("待回复队列读取失败，本轮未更新；稍后会自动重试。");
+      setLastError(message);
+      if (options.render || panelMode === "chat") await renderChatAssistant(message);
+      return { ok: false, reason: "storage_read_failed", message };
+    }
+
+    const queue = mergeHrReplyQueue(stored.items[HR_REPLY_QUEUE_KEY], fresh);
+    const saved = await storageSet({ [HR_REPLY_QUEUE_KEY]: queue });
+    if (!saved) {
+      const message = appendHrReplyDiscoveryDiagnostics("待回复队列保存失败，本轮发现未落盘；稍后会自动重试。");
+      setLastError(message);
+      if (options.render || panelMode === "chat") await renderChatAssistant(message);
+      return { ok: false, reason: "storage_write_failed", message };
+    }
     updatePendingHrQueueCount(queue);
     const count = pendingHrReplyItems(queue).length;
-    const message = fresh.length
+    const baseMessage = fresh.length
       ? `已检查消息列表，发现 ${fresh.length} 条可见待回复。`
       : "已检查消息列表，暂未看到带未读标记的 HR 回复。";
+    const message = appendHrReplyDiscoveryDiagnostics(baseMessage);
     if (options.render || panelMode === "chat") await renderChatAssistant(message);
     return {
       ok: true,
@@ -1651,6 +1754,7 @@ ${runtimeStateHtml()}
       queue,
       lock: taskLockSnapshot(),
       autoApplyActive: isAutoApplyBusy(),
+      discovery: runtimeState.hrReplyDiscoveryDiagnostics,
       message,
     };
   }
@@ -1672,72 +1776,358 @@ ${runtimeStateHtml()}
       .filter((card) => !card.classList.contains("drawer"));
   }
 
-  function extractHrReplyQueueItem(card, index = 0) {
-    const hrName = text(card, ".name-text") || text(card, ".name-box") || "";
-    const titleLine = text(card, ".title-box") || "";
-    const latest = clipText(text(card, ".last-msg-text") || text(card, ".gray.last-msg") || "", 220);
-    const time = text(card, ".time") || "";
-    const unreadBadge = card.querySelector(".notice-badge,.dot");
-    const unread = Boolean(unreadBadge);
-    const unreadCountText = unreadBadge ? inlineText(unreadBadge) || "dot" : "";
-    const draft = Boolean(card.querySelector(".draft")) || /草稿/.test(inlineText(card.querySelector(".gray.last-msg") || card));
-    const company = extractCompanyFromTitleLine(titleLine, hrName);
-    const id = makeHrReplyId({
-      hr_name: hrName,
-      company,
-      latest_hr_message: latest,
-      time_text: time,
-      data_hint: dataHintForNode(card),
-    });
+  function selectedConversationCard() {
+    return conversationCards().find(conversationCardHasSelectedMarker) || null;
+  }
+
+  function conversationCardHasSelectedMarker(card) {
+    const wrapper = card?.closest?.(".friend-content-warp");
+    return [card, wrapper].filter(Boolean).some(nodeHasSelectedConversationMarker);
+  }
+
+  function nodeHasSelectedConversationMarker(node) {
+    if (!node) return false;
+    if (
+      node.getAttribute?.("aria-selected") === "true"
+      || node.getAttribute?.("aria-current") === "true"
+      || node.getAttribute?.("data-selected") === "true"
+      || node.getAttribute?.("data-active") === "true"
+      || node.getAttribute?.("data-current") === "true"
+    ) return true;
+    return Array.from(node.classList || []).some(classTokenIsSelectedConversation);
+  }
+
+  function classTokenIsSelectedConversation(className) {
+    return /(^|[-_])(selected|select|active|current|cur|checked)([-_]|$)/i.test(className)
+      && !/(^|[-_])(inactive|disabled|unselected)([-_]|$)/i.test(className);
+  }
+
+  function extractUnreadEvidence(card) {
+    const root = card?.closest?.(".friend-content-warp") || card;
+    const avatarRoots = avatarUnreadRoots(card, root);
+    const knownNode = firstVisibleNode([
+      ...avatarRoots.flatMap((avatarRoot) => candidateNodes(avatarRoot, ".notice-badge,.dot")),
+      ...candidateNodes(card, ".notice-badge,.dot"),
+      ...candidateNodes(root, ".notice-badge,.dot"),
+    ]);
+    if (knownNode) {
+      const isNoticeBadge = Boolean(
+        knownNode.matches?.(".notice-badge")
+        || knownNode.classList?.contains?.("notice-badge"),
+      );
+      return {
+        unread: true,
+        kind: isNoticeBadge ? "badge" : "dot",
+        countText: inlineText(knownNode),
+        source: isNoticeBadge ? "notice_badge" : "dot",
+      };
+    }
+
+    const numericNode = firstVisibleNode(candidateNodes(root, "span,div,i,b,em,strong")
+      .filter((node) => node !== root && node !== card)
+      .filter(isTrustedAvatarNumericUnreadNode)
+      .filter((node) => isAvatarBoundUnreadNode(node, avatarRoots, root)));
+    if (!numericNode) return { unread: false, kind: "", countText: "", source: "" };
     return {
-      id,
-      hr_name: hrName,
-      hr_role: extractRoleFromTitleLine(titleLine, hrName, company),
-      company,
-      latest_hr_message: latest,
-      time_text: time,
-      unread,
-      unreadCountText,
-      selected: card.classList.contains("selected"),
-      domIndex: index,
-      dataHint: dataHintForNode(card),
-      shouldQueue: Boolean(unread && latest && !draft),
-      status: "pending",
-      firstSeenAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      unread: true,
+      kind: "avatar_numeric",
+      countText: avatarUnreadCountText(numericNode),
+      source: avatarUnreadSource(numericNode, avatarRoots),
     };
   }
 
+  function avatarUnreadRoots(card, root) {
+    const roots = [
+      firstMatchingDescendant(root, ".figure"),
+      firstMatchingDescendant(card, ".figure"),
+      ...candidateNodes(root, "img").filter((node) => (
+        node.closest?.(".figure")
+        || hasAvatarSemanticHint(node)
+      )),
+    ];
+    return uniqueElements(roots).filter(isVisible);
+  }
+
+  function candidateNodes(root, selector) {
+    if (!root) return [];
+    return uniqueElements([
+      root.matches?.(selector) ? root : null,
+      ...Array.from(root.querySelectorAll?.(selector) || []),
+    ].filter(Boolean));
+  }
+
+  function firstVisibleNode(nodes) {
+    return (nodes || []).find((node) => isVisible(node)) || null;
+  }
+
+  function isTrustedAvatarNumericUnreadNode(node) {
+    const countText = avatarUnreadCountText(node);
+    if (!countText) return false;
+    if (hasUnreadBadgeSemanticHint(node)) return true;
+    return isRedUnreadBadgeNode(node);
+  }
+
+  function isAvatarBoundUnreadNode(node, avatarRoots, root) {
+    if (!root?.contains?.(node) || !avatarRoots.length) return false;
+    return avatarRoots.some((avatarRoot) => (
+      avatarRoot === node
+      || avatarRoot.contains?.(node)
+      || isNearAvatarUnreadCorner(node, avatarRoot)
+    ));
+  }
+
+  function avatarUnreadSource(node, avatarRoots) {
+    return avatarRoots.some((avatarRoot) => avatarRoot.contains?.(node))
+      ? "avatar_figure_numeric"
+      : "avatar_nearby_numeric";
+  }
+
+  function avatarUnreadCountText(node) {
+    const value = inlineText(node);
+    return /^[1-9]\d{0,2}$/.test(value) ? value : "";
+  }
+
+  function hasUnreadBadgeSemanticHint(node) {
+    const names = ["class", "aria-label", "title", "data-testid", "data-test", "data-type", "data-count", "data-badge"];
+    const textValue = names
+      .map((name) => String(node?.getAttribute?.(name) || ""))
+      .join(" ");
+    return /unread|notice|badge|count|num|number|red/i.test(textValue);
+  }
+
+  function hasAvatarSemanticHint(node) {
+    const names = ["class", "alt", "aria-label", "title", "data-testid", "data-test"];
+    const textValue = names
+      .map((name) => String(node?.getAttribute?.(name) || ""))
+      .join(" ");
+    return /avatar|head|photo|portrait|figure/i.test(textValue);
+  }
+
+  function isRedUnreadBadgeNode(node) {
+    const style = typeof getComputedStyle === "function" ? getComputedStyle(node) : (node?.style || {});
+    return isRedColorValue(style?.backgroundColor || style?.background || "")
+      || styleAttributeHasRedBackground(node);
+  }
+
+  function styleAttributeHasRedBackground(node) {
+    const styleText = String(node?.getAttribute?.("style") || "");
+    const match = styleText.match(/background(?:-color)?\s*:\s*([^;]+)/i);
+    return Boolean(match && isRedColorValue(match[1]));
+  }
+
+  function isRedColorValue(value) {
+    const textValue = String(value || "").trim().toLowerCase();
+    if (textValue === "red") return true;
+    const hex = textValue.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+    if (hex) {
+      const raw = hex[1].length === 3
+        ? hex[1].split("").map((char) => `${char}${char}`).join("")
+        : hex[1];
+      const red = Number.parseInt(raw.slice(0, 2), 16);
+      const green = Number.parseInt(raw.slice(2, 4), 16);
+      const blue = Number.parseInt(raw.slice(4, 6), 16);
+      return red >= 180 && green <= 120 && blue <= 120;
+    }
+    const rgb = textValue.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if (!rgb) return false;
+    return Number(rgb[1]) >= 180 && Number(rgb[2]) <= 120 && Number(rgb[3]) <= 120;
+  }
+
+  function isNearAvatarUnreadCorner(node, avatarRoot) {
+    const nodeRect = node.getBoundingClientRect?.();
+    const avatarRect = avatarRoot.getBoundingClientRect?.();
+    if (!nodeRect || !avatarRect || !nodeRect.width || !nodeRect.height || !avatarRect.width || !avatarRect.height) {
+      return false;
+    }
+    const centerX = nodeRect.left + nodeRect.width / 2;
+    const centerY = nodeRect.top + nodeRect.height / 2;
+    const horizontalPad = Math.max(nodeRect.width, 12);
+    const verticalPad = Math.max(nodeRect.height, 12);
+    return centerX >= avatarRect.left - horizontalPad
+      && centerX <= avatarRect.right + horizontalPad
+      && centerY >= avatarRect.top - verticalPad
+      && centerY <= avatarRect.bottom;
+  }
+
+  function extractHrReplyQueueItem(card, index = 0, allCards = null) {
+    const visibleCards = Array.isArray(allCards) ? allCards : conversationCards();
+    const identity = extractConversationIdentityFromCard(card);
+    const hrName = identity.hrName;
+    const titleLine = identity.titleLine;
+    const latest = clipText(text(card, ".last-msg-text") || text(card, ".gray.last-msg") || "", 220);
+    const time = text(card, ".time") || "";
+    const unreadEvidence = extractUnreadEvidence(card);
+    const draft = Boolean(card.querySelector(".draft")) || /草稿/.test(inlineText(card.querySelector(".gray.last-msg") || card));
+    const company = identity.company;
+    const hrRole = identity.hrRole;
+    const combinedText = `${hrName} ${titleLine} ${latest}`;
+    const stableHint = extractStableConversationHint(card, visibleCards, { hrName, company, hrRole });
+    const messageHint = extractStableMessageHint(card);
+    const semanticRoot = card.closest?.(".friend-content-warp") || card;
+    const snapshot = {
+      hr_name: hrName,
+      company,
+      hr_role: hrRole,
+      latest_hr_message: latest,
+      time_text: time,
+      data_hint: stableHint,
+      data_hint_unique: Boolean(stableHint),
+      require_stable_hint: true,
+      message_hint: messageHint,
+      unread: unreadEvidence.unread,
+      unread_kind: unreadEvidence.kind,
+      unread_count_text: unreadEvidence.countText,
+      draft,
+      system: Boolean(
+        semanticRoot.matches?.("[class*='system']")
+        || semanticRoot.querySelector?.("[class*='system']"),
+      ) || /系统通知|平台通知|直聘助手|BOSS助手/.test(combinedText),
+      group: Boolean(
+        semanticRoot.matches?.("[class*='group']")
+        || semanticRoot.querySelector?.("[class*='group']"),
+      ) || /群聊|群组|交流群|多人会话/.test(combinedText),
+      latest_sender: /^\s*(?:\[(?:送达|已读|发送中|发送失败)\]|(?:我|本人)[:：])/.test(latest) ? "me" : "",
+    };
+    const classification = HR_REPLY_DISCOVERY
+      ? HR_REPLY_DISCOVERY.classifySnapshot(snapshot)
+      : {
+        kind: "unavailable",
+        shouldQueue: false,
+        reject_reason: "module_missing",
+        unread: { unread: snapshot.unread, kind: snapshot.unread_kind || "none", count: 0 },
+      };
+    const conversationFingerprint = HR_REPLY_DISCOVERY?.makeConversationFingerprint(snapshot) || "";
+    const messageFingerprint = HR_REPLY_DISCOVERY?.makeMessageFingerprint({ ...snapshot, conversationFingerprint }) || "";
+    const now = new Date().toISOString();
+    return {
+      id: conversationFingerprint ? `hr_reply_${conversationFingerprint.replace(/^conversation_/, "")}` : "",
+      conversationFingerprint,
+      messageFingerprint,
+      hr_name: hrName,
+      hr_role: hrRole,
+      company,
+      job_title: "",
+      latest_hr_message: latest,
+      latest_sender_role: snapshot.latest_sender || (classification.shouldQueue ? "hr" : ""),
+      time_text: time,
+      unread: classification.unread.unread,
+      unreadCountText: snapshot.unread_count_text,
+      unreadEvidenceSource: unreadEvidence.source,
+      dataHint: stableHint,
+      data_hint: stableHint,
+      data_hint_unique: Boolean(stableHint),
+      dataHintUnique: Boolean(stableHint),
+      messageHint,
+      discovery_kind: classification.kind,
+      reject_reason: classification.reject_reason,
+      shouldQueue: classification.shouldQueue,
+      status: "pending",
+      firstSeenAt: now,
+      messageFirstSeenAt: now,
+      updatedAt: now,
+      selected: card.classList.contains("selected"),
+      domIndex: index,
+    };
+  }
+
+  function conversationDataKey(card) {
+    const wrapper = card?.closest?.(".friend-content-warp") || card;
+    const node = card?.hasAttribute?.("data-key")
+      ? card
+      : wrapper?.hasAttribute?.("data-key") ? wrapper : null;
+    return String(node?.getAttribute?.("data-key") || "").trim();
+  }
+
+  function extractStableMessageHint(card) {
+    const values = Array.from(card?.querySelectorAll?.("[data-mid]") || [])
+      .map((node) => String(node.getAttribute("data-mid") || "").trim())
+      .filter(Boolean);
+    const uniqueValues = Array.from(new Set(values));
+    return uniqueValues.length === 1 ? `data-mid:${uniqueValues[0]}` : "";
+  }
+
+  function extractStableConversationHint(card, allCards, identity = null) {
+    const cards = Array.isArray(allCards) && allCards.length ? allCards : [card];
+    const value = conversationDataKey(card);
+    if (value) {
+      const count = cards.filter((entry) => conversationDataKey(entry) === value).length;
+      return count === 1 ? `data-key:${value}` : "";
+    }
+
+    const identityHint = conversationIdentityHint(identity) || conversationIdentityHintFromCard(card);
+    if (!identityHint) return "";
+    const count = cards.filter((entry) => conversationIdentityHintFromCard(entry) === identityHint).length;
+    return count === 1 ? identityHint : "";
+  }
+
+  function conversationIdentityHintFromCard(card) {
+    return conversationIdentityHint(extractConversationIdentityFromCard(card));
+  }
+
+  function extractConversationIdentityFromCard(card) {
+    const hrName = text(card, ".name-text") || text(card, ".name-box") || "";
+    const titleLine = text(card, ".title-box") || "";
+    const structuredParts = extractTitleIdentityFragments(card, hrName);
+    const company = structuredParts.length >= 2
+      ? structuredParts[0]
+      : extractCompanyFromTitleLine(titleLine, hrName);
+    const hrRole = structuredParts.length >= 2
+      ? structuredParts.slice(1).join(" ")
+      : extractRoleFromTitleLine(titleLine, hrName, company);
+    return { hrName, company, hrRole, titleLine };
+  }
+
+  function extractTitleIdentityFragments(card, hrName) {
+    const root = card?.querySelector?.(".title-box") || card?.querySelector?.(".name-box");
+    if (!root) return [];
+    const candidates = Array.from(root.querySelectorAll?.("span, em, strong, b, i") || [])
+      .filter((node) => !node.children || node.children.length === 0)
+      .map((node) => normalizeTitleIdentityPart(inlineText(node)))
+      .filter((value) => value && value !== normalizeTitleIdentityPart(hrName));
+    return Array.from(new Set(candidates));
+  }
+
+  function conversationIdentityHint(identity = {}) {
+    const hrName = normalizeIdentityHintValue(identity?.hrName || identity?.hr_name);
+    const company = normalizeIdentityHintValue(identity?.company);
+    const hrRole = normalizeIdentityHintValue(identity?.hrRole || identity?.hr_role);
+    if (!hrName || !company || !hrRole) return "";
+    return `identity:${simpleHash([hrName, company, hrRole].join("|"))}`;
+  }
+
+  function normalizeIdentityHintValue(value) {
+    return String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+  }
+
   function normalizeHrReplyQueue(value) {
-    if (!Array.isArray(value)) return [];
-    return value
-      .filter((item) => item && typeof item === "object" && item.id)
-      .slice(-HR_REPLY_QUEUE_LIMIT);
+    const normalized = HR_REPLY_DISCOVERY
+      ? HR_REPLY_DISCOVERY.dedupeQueueItems(value)
+      : (Array.isArray(value) ? value.filter((item) => item && typeof item === "object" && item.id) : []);
+    return normalized.slice(-HR_REPLY_QUEUE_LIMIT);
   }
 
   function pendingHrReplyItems(queue) {
-    return normalizeHrReplyQueue(queue).filter((item) => item.status !== "draft_filled");
+    const normalized = normalizeHrReplyQueue(queue);
+    return HR_REPLY_DISCOVERY
+      ? HR_REPLY_DISCOVERY.pendingItems(normalized)
+      : normalized.filter((item) => ["pending", "needs_user"].includes(item.status));
   }
 
   function mergeHrReplyQueue(existingValue, freshItems) {
-    const existing = normalizeHrReplyQueue(existingValue);
-    const map = new Map(existing.map((item) => [item.id, item]));
-    freshItems.forEach((item) => {
-      const previous = map.get(item.id);
-      const preservedStatus = ["draft_filled", "needs_user"].includes(previous?.status)
-        ? previous.status
-        : "pending";
-      map.set(item.id, {
-        ...previous,
-        ...item,
-        status: preservedStatus,
-        firstSeenAt: previous?.firstSeenAt || item.firstSeenAt,
-        updatedAt: new Date().toISOString(),
-      });
-    });
-    return Array.from(map.values())
+    const merged = HR_REPLY_DISCOVERY
+      ? HR_REPLY_DISCOVERY.mergeQueueCandidate(existingValue, freshItems, { limit: HR_REPLY_QUEUE_LIMIT })
+      : mergeHrReplyQueueFallback(existingValue, freshItems);
+    return merged
       .filter((item) => !isStaleHrReplyItem(item))
       .slice(-HR_REPLY_QUEUE_LIMIT);
+  }
+
+  function mergeHrReplyQueueFallback(existingValue, freshItems) {
+    const map = new Map(normalizeHrReplyQueue(existingValue).map((item) => [item.id, item]));
+    (Array.isArray(freshItems) ? freshItems : [])
+      .filter((item) => item?.debug && item.id)
+      .forEach((item) => map.set(item.id, { ...map.get(item.id), ...item }));
+    return Array.from(map.values()).slice(-HR_REPLY_QUEUE_LIMIT);
   }
 
   function isStaleHrReplyItem(item) {
@@ -1745,38 +2135,34 @@ ${runtimeStateHtml()}
     return Number.isFinite(updatedAt) && Date.now() - updatedAt > 24 * 60 * 60 * 1000;
   }
 
-  function makeHrReplyId(item) {
-    return `hr_reply_${simpleHash([
-      item.data_hint,
-      item.hr_name,
-      item.company,
-      item.latest_hr_message,
-      item.time_text,
-    ].filter(Boolean).join("|"))}`;
-  }
-
-  function dataHintForNode(node) {
-    const attrs = ["data-id", "data-key", "data-uid", "data-fid", "data-mid", "d-c", "ka"];
-    return attrs
-      .map((attr) => node.getAttribute?.(attr))
-      .filter(Boolean)
-      .join("|");
-  }
-
   function extractCompanyFromTitleLine(titleLine, hrName) {
-    const cleaned = String(titleLine || "").replace(String(hrName || ""), "").replace(/\s+/g, " ").trim();
-    const parts = cleaned.split(/[·|｜\-—]/).map((part) => part.trim()).filter(Boolean);
-    return parts[0] || "";
+    const parts = splitTitleIdentityText(titleLine, hrName);
+    return parts.length >= 2 ? parts.slice(0, -1).join(" ") : "";
   }
 
   function extractRoleFromTitleLine(titleLine, hrName, company) {
+    const parts = splitTitleIdentityText(titleLine, hrName);
+    if (parts.length < 2) return "";
+    const normalizedCompany = normalizeTitleIdentityPart(company);
+    const companyParts = parts.slice(0, -1).join(" ");
+    return normalizeTitleIdentityPart(companyParts) === normalizedCompany ? parts[parts.length - 1] : "";
+  }
+
+  function splitTitleIdentityText(titleLine, hrName) {
     const cleaned = String(titleLine || "")
-      .replace(String(hrName || ""), "")
-      .replace(String(company || ""), "")
+      .replace(String(hrName || ""), " ")
+      .replace(/[·|｜\-—]+/g, " ")
       .replace(/\s+/g, " ")
       .trim();
-    const parts = cleaned.split(/[·|｜\-—]/).map((part) => part.trim()).filter(Boolean);
-    return parts[0] || "";
+    if (!cleaned) return [];
+    return cleaned.split(/\s+/).map(normalizeTitleIdentityPart).filter(Boolean);
+  }
+
+  function normalizeTitleIdentityPart(value) {
+    return String(value || "")
+      .replace(/^[\s·|｜\-—:：,，/]+|[\s·|｜\-—:：,，/]+$/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   function hrReplyStateMessage(queue) {
@@ -1784,6 +2170,61 @@ ${runtimeStateHtml()}
     if (count) return `当前待回复 ${count} 条。`;
     if (isBossMessagePage()) return "当前没有识别到待回复队列。";
     return "打开 BOSS 消息页后可以检查 HR 回复。";
+  }
+
+  function appendHrReplyDiscoveryDiagnostics(message, enabled = debugHrReplyEnabled, diagnostics = runtimeState.hrReplyDiscoveryDiagnostics) {
+    const textValue = String(message || "");
+    if (enabled !== true) return textValue;
+    const line = formatHrReplyDiscoveryDiagnostics(diagnostics);
+    return line ? textValue + "\n" + line : textValue;
+  }
+
+  function formatHrReplyDiscoveryDiagnostics(diagnostics = {}) {
+    const snapshot = sanitizeHrReplyDiscoveryDiagnostics(diagnostics);
+    return [
+      "诊断",
+      "cardCount=" + snapshot.cardCount,
+      "queuedCount=" + snapshot.queuedCount,
+      "rejectedCount=" + snapshot.rejectedCount,
+      "singleCardUnreadCount=" + snapshot.singleCardUnreadCount,
+      "numericUnreadMissingStableHintCount=" + snapshot.numericUnreadMissingStableHintCount,
+      "unreadSources=" + (snapshot.unreadSources || "-"),
+      "rejectReasons=" + (snapshot.rejectReasons || "-"),
+    ].join(" ");
+  }
+
+  function discoveryDiagnosticsSnapshot(diagnostics = runtimeState.hrReplyDiscoveryDiagnostics) {
+    return sanitizeHrReplyDiscoveryDiagnostics(diagnostics);
+  }
+
+  function sanitizeHrReplyDiscoveryDiagnostics(diagnostics = {}) {
+    return {
+      cardCount: safeDiagnosticsCount(diagnostics.cardCount),
+      queuedCount: safeDiagnosticsCount(diagnostics.queuedCount),
+      rejectedCount: safeDiagnosticsCount(diagnostics.rejectedCount),
+      singleCardUnreadCount: safeDiagnosticsCount(diagnostics.singleCardUnreadCount),
+      numericUnreadMissingStableHintCount: safeDiagnosticsCount(diagnostics.numericUnreadMissingStableHintCount),
+      unreadSources: safeDiagnosticsCountList(diagnostics.unreadSources),
+      rejectReasons: safeDiagnosticsCountList(diagnostics.rejectReasons),
+    };
+  }
+
+  function safeDiagnosticsCount(value) {
+    const count = Number(value);
+    return Number.isFinite(count) && count > 0 ? Math.floor(count) : 0;
+  }
+
+  function safeDiagnosticsCountList(value) {
+    return String(value || "")
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+      .map((entry) => {
+        const match = entry.match(/^([a-zA-Z0-9_-]+):(\d+)$/);
+        return match ? match[1] + ":" + Number(match[2]) : "";
+      })
+      .filter(Boolean)
+      .join(",");
   }
 
   async function processHrReplyItem(itemId) {
@@ -1841,6 +2282,9 @@ ${runtimeStateHtml()}
 
       if (item && !debugItem) {
         await scanHrReplyQueue({ source: "before_process", render: false });
+        const refreshedItem = await reloadHrReplyQueueItem(item);
+        if (!refreshedItem) return stopHrReplyForConversationMismatch(item);
+        item = refreshedItem;
         const currentEvidence = extractCurrentChatEvidence(null);
         evidenceResult = evidenceMatchesQueueItem(currentEvidence, item)
           ? { ok: true, matched: true, evidence: currentEvidence }
@@ -1881,11 +2325,19 @@ ${runtimeStateHtml()}
       }
 
       const reply = await requestChatReply(requestEvidence);
-      const result = await handleChatReplyResult(reply, requestEvidence, item);
+      const responseEvidence = extractCurrentChatEvidence(item);
+      if (!replyTargetStillCurrent(requestEvidence, responseEvidence, item)) {
+        return stopHrReplyForConversationMismatch(item);
+      }
+      if (currentChatAlreadyReplied(responseEvidence)) {
+        return stopHrReplyBecauseAlreadyReplied(item);
+      }
+      const result = await handleChatReplyResult(reply, responseEvidence, item);
       forgetHrReplyTask();
       return result;
     } catch (error) {
       const message = formatChatReplyError(error);
+      forgetHrReplyTask();
       setLastError(message);
       if (item?.id) await markHrReplyQueueItem(item.id, "needs_user", message);
       await renderChatAssistant(message);
@@ -1913,7 +2365,7 @@ ${runtimeStateHtml()}
 
   async function stopHrReplyForConversationMismatch(item) {
     const message = "当前会话与待回复记录不一致，请打开对应会话后重试";
-    if (item?.id) await markHrReplyQueueItem(item.id, "needs_user", message);
+    if (item?.id) await markHrReplyQueueItem(item.id, "needs_user", message, { statusReason: "conversation_mismatch" });
     forgetHrReplyTask();
     await renderChatAssistant(message);
     return { ok: false, mismatch: true, filled: false, error: message, message };
@@ -1943,12 +2395,13 @@ ${runtimeStateHtml()}
   function findConversationCardForQueueItem(item) {
     const cards = conversationCards();
     const byDataHint = item.dataHint
-      ? cards.find((card) => dataHintForNode(card) && dataHintForNode(card) === item.dataHint)
+      ? cards.find((card) => extractStableConversationHint(card, cards) === item.dataHint)
       : null;
     if (byDataHint) return byDataHint;
+    if (item.dataHint) return null;
 
     return cards.find((card, index) => {
-      const cardItem = extractHrReplyQueueItem(card, index);
+      const cardItem = extractHrReplyQueueItem(card, index, cards);
       if (!cardItem) return false;
       const sameName = exactChatMatchValue(item.hr_name, cardItem.hr_name);
       const sameCompany = relatedChatMatchValue(item.company, cardItem.company);
@@ -1979,19 +2432,68 @@ ${runtimeStateHtml()}
   function evidenceMatchesQueueItem(evidence, item) {
     if (!item) return true;
     const identity = evidence.current_chat_identity || {};
+    const stableIdentityMatch = stableConversationIdentityMatches({
+      expectedHint: item.dataHint,
+      actualHint: identity.data_hint,
+      expectedName: item.hr_name,
+      actualName: identity.hr_name,
+    });
+    if (stableIdentityMatch !== null) return stableIdentityMatch;
     const hasComparableNames = Boolean(compactChatMatchValue(item.hr_name) && compactChatMatchValue(identity.hr_name));
-    const hasComparableHints = Boolean(compactChatMatchValue(item.dataHint) && compactChatMatchValue(identity.data_hint));
-    const sameName = exactChatMatchValue(item.hr_name, identity.hr_name);
-    const sameHint = exactChatMatchValue(item.dataHint, identity.data_hint);
-    const sameIdentity = hasComparableNames
-      ? sameName
-      : hasComparableHints && sameHint;
+    const sameName = hrNameMatches(item.hr_name, identity.hr_name);
     const hasComparableJobs = Boolean(compactChatMatchValue(item.job_title) && compactChatMatchValue(identity.job_title));
     const sameContext = hasComparableJobs
       ? relatedChatMatchValue(item.job_title, identity.job_title)
       : relatedChatMatchValue(item.company, identity.company);
     const sameLatest = chatMessageMatches(item.latest_hr_message, evidence.latest_hr_message);
-    return Boolean(sameIdentity && sameContext && sameLatest);
+    return Boolean(hasComparableNames && sameName && sameContext && sameLatest);
+  }
+
+  function replyTargetStillCurrent(before, after, item = null) {
+    if (!before || !after || !before.latest_hr_message || !after.latest_hr_message) return false;
+    if (item && !evidenceMatchesQueueItem(after, item)) return false;
+    const beforeIdentity = before.current_chat_identity || {};
+    const afterIdentity = after.current_chat_identity || {};
+    const stableIdentityMatch = stableConversationIdentityMatches({
+      expectedHint: beforeIdentity.data_hint,
+      actualHint: afterIdentity.data_hint,
+      expectedName: beforeIdentity.hr_name,
+      actualName: afterIdentity.hr_name,
+    });
+    if (stableIdentityMatch !== null) return stableIdentityMatch;
+    const sameIdentity = hrNameMatches(beforeIdentity.hr_name, afterIdentity.hr_name);
+    const beforeJob = compactChatMatchValue(beforeIdentity.job_title);
+    const afterJob = compactChatMatchValue(afterIdentity.job_title);
+    const sameContext = beforeJob || afterJob
+      ? relatedChatMatchValue(beforeIdentity.job_title, afterIdentity.job_title)
+      : relatedChatMatchValue(beforeIdentity.company, afterIdentity.company);
+    const sameLatestHr = compactChatMatchValue(before.latest_hr_message)
+      === compactChatMatchValue(after.latest_hr_message);
+    return Boolean(sameIdentity && sameContext && sameLatestHr);
+  }
+
+  function stableConversationIdentityMatches({ expectedHint, actualHint, expectedName, actualName } = {}) {
+    const hasExpectedHint = Boolean(compactChatMatchValue(expectedHint));
+    if (!hasExpectedHint) return null;
+    if (!compactChatMatchValue(actualHint)) return null;
+    const sameHint = HR_REPLY_DISCOVERY?.stableHintsMatch
+      ? HR_REPLY_DISCOVERY.stableHintsMatch({ data_hint: expectedHint }, { data_hint: actualHint })
+      : exactChatMatchValue(expectedHint, actualHint);
+    if (!sameHint) return false;
+    const hasComparableNames = Boolean(compactChatMatchValue(expectedName) && compactChatMatchValue(actualName));
+    return !hasComparableNames || hrNameMatches(expectedName, actualName);
+  }
+
+  async function reloadHrReplyQueueItem(item) {
+    if (!item) return null;
+    const stored = await storageGet([HR_REPLY_QUEUE_KEY]);
+    const queue = normalizeHrReplyQueue(stored[HR_REPLY_QUEUE_KEY]);
+    return queue.find((entry) => entry.id === item.id)
+      || queue.find((entry) => (
+        item.conversationFingerprint
+        && entry.conversationFingerprint === item.conversationFingerprint
+      ))
+      || null;
   }
 
   function compactChatMatchValue(value) {
@@ -2013,17 +2515,36 @@ ${runtimeStateHtml()}
       && (normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft));
   }
 
+  function hrNameMatches(left, right) {
+    const normalizedLeft = compactChatMatchValue(left);
+    const normalizedRight = compactChatMatchValue(right);
+    if (!normalizedLeft || !normalizedRight) return false;
+    if (normalizedLeft === normalizedRight) return true;
+    return Math.min(normalizedLeft.length, normalizedRight.length) >= 2
+      && (normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft));
+  }
+
   function chatMessageMatches(left, right) {
     const normalizedLeft = compactChatMatchValue(left);
     const normalizedRight = compactChatMatchValue(right);
     if (!normalizedLeft || !normalizedRight) return false;
     if (normalizedLeft === normalizedRight) return true;
-    return Math.min(normalizedLeft.length, normalizedRight.length) >= 8
-      && (normalizedLeft.startsWith(normalizedRight) || normalizedRight.startsWith(normalizedLeft));
+    const leftPrefix = chatMessageComparablePrefix(normalizedLeft);
+    const rightPrefix = chatMessageComparablePrefix(normalizedRight);
+    if (!leftPrefix || !rightPrefix) return false;
+    return Math.min(leftPrefix.length, rightPrefix.length) >= 8
+      && (leftPrefix.startsWith(rightPrefix) || rightPrefix.startsWith(leftPrefix));
+  }
+
+  function chatMessageComparablePrefix(normalizedValue) {
+    const value = String(normalizedValue || "");
+    const ellipsisIndex = value.search(/\.{2,}|…|。{2,}/);
+    const prefix = ellipsisIndex >= 0 ? value.slice(0, ellipsisIndex) : value;
+    return prefix.replace(/[.。…]+$/g, "");
   }
 
   function extractCurrentChatEvidence(queueItem = null) {
-    const selectedCard = document.querySelector(".friend-content.selected");
+    const selectedCard = selectedConversationCard();
     const selectedInfo = selectedCard ? extractHrReplyQueueItem(selectedCard, 0) : null;
     const positionRoot = document.querySelector(".chat-position-content") || document.querySelector(".position-content");
     const topRoot = document.querySelector(".top-info-content") || document.querySelector(".chat-conversation");
@@ -2965,9 +3486,23 @@ ${runtimeStateHtml()}
       await renderChatAssistant(message);
       return { ok: false, filled: false, data, error: message };
     }
-    fillChatInput(input, String(data.draft || "").trim());
+    const fillEvidence = extractCurrentChatEvidence(item);
+    if (!replyTargetStillCurrent(evidence, fillEvidence, item)) {
+      return stopHrReplyForConversationMismatch(item);
+    }
+    if (currentChatAlreadyReplied(fillEvidence)) {
+      return stopHrReplyBecauseAlreadyReplied(item);
+    }
+    const currentInput = findChatInput();
+    if (!currentInput || currentInput !== input) {
+      const message = "聊天输入框在生成期间发生变化，未填入草稿，请重新处理。";
+      if (item?.id) await markHrReplyQueueItem(item.id, "needs_user", message);
+      await renderChatAssistant(message);
+      return { ok: false, filled: false, data, error: message };
+    }
+    fillChatInput(currentInput, String(data.draft || "").trim());
     const message = `草稿已填入，请用户确认发送。\n${modeText}${durationText}`;
-    if (item?.id) await markHrReplyQueueItem(item.id, "draft_filled", message);
+    if (item?.id) await markHrReplyQueueItem(item.id, "draft_filled", message, { statusReason: "draft_filled", cleanupDuplicates: true });
     renderHrReplyDraftHelper(evidence, data);
     await renderChatAssistant(message);
     return { ok: true, filled: true, data, message };
@@ -2985,16 +3520,91 @@ ${runtimeStateHtml()}
     ].filter(Boolean).join("\n").slice(0, 8000);
   }
 
-  async function markHrReplyQueueItem(itemId, status, note = "") {
+  async function markHrReplyQueueItem(itemId, status, note = "", options = {}) {
     if (!itemId) return;
     const stored = await storageGet([HR_REPLY_QUEUE_KEY]);
-    const queue = normalizeHrReplyQueue(stored[HR_REPLY_QUEUE_KEY]).map((item) => (
+    const now = new Date().toISOString();
+    const existingQueue = normalizeHrReplyQueue(stored[HR_REPLY_QUEUE_KEY]);
+    const queue = existingQueue.map((item) => (
       item.id === itemId
-        ? { ...item, status, note: clipText(note, 300), updatedAt: new Date().toISOString() }
+        ? {
+          ...item,
+          status,
+          statusReason: options.statusReason || item.statusReason || "",
+          statusChangedAt: item.status === status
+            ? (item.statusChangedAt || item.updatedAt || item.firstSeenAt || now)
+            : now,
+          note: clipText(note, 300),
+          updatedAt: now,
+        }
         : item
     ));
-    await storageSet({ [HR_REPLY_QUEUE_KEY]: queue });
-    updatePendingHrQueueCount(queue);
+    const cleanedQueue = options.cleanupDuplicates
+      ? cleanupHrReplyQueueAfterDraftFilled(queue, itemId)
+      : queue;
+    await storageSet({ [HR_REPLY_QUEUE_KEY]: cleanedQueue });
+    updatePendingHrQueueCount(cleanedQueue);
+  }
+
+  function cleanupHrReplyQueueAfterDraftFilled(queue, itemId) {
+    const target = queue.find((item) => item.id === itemId);
+    if (!target || target.status !== "draft_filled") return queue;
+    return queue.filter((item) => (
+      item.id === itemId
+      || !sameHrReplyQueueTarget(item, target)
+      || !isSafeToRemoveAfterDraftFilled(item)
+    ));
+  }
+
+  function isSafeToRemoveAfterDraftFilled(item) {
+    return Boolean(
+      item?.debug
+      || item?.source === HR_REPLY_DEBUG_SOURCE
+      || isRecoverableHrReplyQueueItem(item)
+      || item?.status === "draft_filled"
+    );
+  }
+
+  function isRecoverableHrReplyQueueItem(item = {}) {
+    if (item.status !== "needs_user") return false;
+    const textValue = [
+      item.statusReason,
+      item.status_reason,
+      item.reason,
+      item.note,
+      item.error,
+      item.message,
+    ].map((value) => String(value || "").toLowerCase()).join(" ");
+    return textValue.includes("conversation_mismatch")
+      || textValue.includes("当前会话与待回复记录不一致")
+      || textValue.includes("conversation mismatch");
+  }
+
+  function sameHrReplyQueueTarget(left = {}, right = {}) {
+    if (!left || !right) return false;
+    if (left.id && right.id && left.id === right.id) return true;
+    const leftConversation = compactChatMatchValue(left.conversationFingerprint);
+    const rightConversation = compactChatMatchValue(right.conversationFingerprint);
+    if (leftConversation && rightConversation && leftConversation === rightConversation) return true;
+    const leftHint = left.dataHint || left.data_hint;
+    const rightHint = right.dataHint || right.data_hint;
+    if (compactChatMatchValue(leftHint) && compactChatMatchValue(rightHint)) {
+      const sameHint = HR_REPLY_DISCOVERY?.stableHintsMatch
+        ? HR_REPLY_DISCOVERY.stableHintsMatch({ data_hint: leftHint }, { data_hint: rightHint })
+        : exactChatMatchValue(leftHint, rightHint);
+      if (sameHint) return true;
+    }
+    const sameName = hrNameMatches(left.hr_name, right.hr_name);
+    const sameCompany = relatedChatMatchValue(left.company, right.company);
+    const sameRole = !compactChatMatchValue(left.hr_role)
+      || !compactChatMatchValue(right.hr_role)
+      || relatedChatMatchValue(left.hr_role, right.hr_role);
+    const sameMessage = chatMessageMatches(left.latest_hr_message, right.latest_hr_message)
+      || (
+        compactChatMatchValue(left.messageFingerprint)
+        && compactChatMatchValue(left.messageFingerprint) === compactChatMatchValue(right.messageFingerprint)
+      );
+    return Boolean(sameName && sameCompany && sameRole && sameMessage);
   }
 
   async function removeHrReplyQueueItem(itemId) {
@@ -3040,18 +3650,31 @@ ${runtimeStateHtml()}
   async function resumeHrReplyTaskIfNeeded() {
     const task = readHrReplyTask();
     if (!task || !isBossMessagePage()) return;
+    // The persisted task only bridges the one user-approved navigation to the message page.
+    // Consume it before processing so refreshes and network failures cannot auto-retry it.
+    forgetHrReplyTask();
     await sleep(800);
     if (!panel) await show();
     await processHrReplyTarget(task.item || null);
   }
 
-  function startHrReplyQueueWatcher() {
-    if (hrReplyWatcherStarted) return;
-    hrReplyWatcherStarted = true;
-    setInterval(() => {
-      if (!isBossMessagePage() || hrReplyProcessing) return;
-      scanHrReplyQueue({ source: "watcher", render: false }).catch(() => {});
-    }, HR_REPLY_SCAN_INTERVAL_MS);
+  async function runScheduledHrReplyScan() {
+    if (!isBossMessagePage()) {
+      return { ok: true, skipped: true, reason: "not_message_page" };
+    }
+    clearStaleTaskLock();
+    if (hrReplyScheduledScanRunning || hrReplyProcessing || isAutoApplyBusy() || taskLock) {
+      return { ok: true, skipped: true, reason: "busy" };
+    }
+
+    hrReplyScheduledScanRunning = true;
+    try {
+      const result = await scanHrReplyQueue({ source: "background_alarm", render: false });
+      if (!result?.ok) return { ok: false, reason: "scan_failed" };
+      return { ok: true, skipped: false, reason: "scan_complete", count: Number(result.count || 0) };
+    } finally {
+      hrReplyScheduledScanRunning = false;
+    }
   }
 
   function renderHrReplyDraftHelper(evidence, reply) {
@@ -3795,7 +4418,10 @@ ${runtimeStateHtml()}
       .filter((node) => {
         const label = normalizedButtonText(node);
         if (/取消|稍后|返回|关闭|不了|暂不|再想想/.test(label)) return false;
-        return /^(留在此页|留在本页|留在当前页|确认|确定|立即沟通|继续沟通|发送简历|投递简历|开始沟通|开聊)/.test(label);
+        const modalRoot = modalRoots.find((root) => root === node || root.contains(node));
+        const modalText = normalizeLooseText(modalRoot?.innerText || modalRoot?.textContent || "");
+        if (/发送.*简历|投递.*简历|附件简历|简历附件/.test(`${label}${modalText}`)) return false;
+        return /^(留在此页|留在本页|留在当前页|确认|确定|立即沟通|继续沟通|开始沟通|开聊)/.test(label);
       });
     if (preferStayOnPage && hasSentDialog) {
       return candidates.find((node) => /^留在(此页|本页|当前页)/.test(normalizedButtonText(node))) || null;
@@ -3887,7 +4513,7 @@ ${runtimeStateHtml()}
     const className = String(node.className || "");
     let score = 0;
     if (/primary|confirm|sure|submit|btn-primary/i.test(className)) score += 4;
-    if (/发送简历|投递简历|开始沟通|立即沟通|继续沟通/.test(label)) score += 3;
+    if (/开始沟通|立即沟通|继续沟通/.test(label)) score += 3;
     if (/留在此页|留在本页|留在当前页/.test(label)) score -= 1;
     if (/确认|确定/.test(label)) score += 2;
     const rect = node.getBoundingClientRect();
@@ -4815,6 +5441,27 @@ ${runtimeStateHtml()}
         chrome.storage.local.get(keys, (items) => resolve(chrome.runtime?.lastError ? {} : items || {}));
       } catch (_) {
         resolve({});
+      }
+    });
+  }
+
+  function storageGetChecked(keys) {
+    return new Promise((resolve) => {
+      if (!hasStorageAccess()) {
+        resolve({ ok: false, items: {}, error: "storage_unavailable" });
+        return;
+      }
+      try {
+        chrome.storage.local.get(keys, (items) => {
+          const lastError = chrome.runtime?.lastError;
+          if (lastError) {
+            resolve({ ok: false, items: {}, error: lastError.message || "storage_read_failed" });
+            return;
+          }
+          resolve({ ok: true, items: items || {}, error: "" });
+        });
+      } catch (error) {
+        resolve({ ok: false, items: {}, error: error?.message || "storage_read_failed" });
       }
     });
   }

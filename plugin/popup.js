@@ -22,6 +22,7 @@ const checkHrReplyBtn = document.getElementById("checkHrReplyBtn");
 const hrReplyCountEl = document.getElementById("hrReplyCount");
 const hrReplyListEl = document.getElementById("hrReplyList");
 const PLUGIN_CONFIG = window.JOB_ACCELERATOR_CONFIG || {};
+const HR_REPLY_DISCOVERY = window.HRReplyDiscovery || null;
 const CLOUD_DEFAULT_API = "http://121.196.231.160/job-accelerator/match";
 const DEFAULT_API = normalizeApiUrl(PLUGIN_CONFIG.DEFAULT_API || CLOUD_DEFAULT_API, CLOUD_DEFAULT_API);
 const DEFAULT_API_TOKEN = PLUGIN_CONFIG.API_TOKEN || "";
@@ -262,12 +263,15 @@ function clearPageSessionCache() {
 }
 
 function normalizeHrReplyQueue(value) {
+  if (HR_REPLY_DISCOVERY) return HR_REPLY_DISCOVERY.dedupeQueueItems(value);
   if (!Array.isArray(value)) return [];
   return value.filter((item) => item && item.id);
 }
 
 function pendingHrReplyItems(queue) {
-  return normalizeHrReplyQueue(queue).filter((item) => item.status !== "draft_filled");
+  return HR_REPLY_DISCOVERY
+    ? HR_REPLY_DISCOVERY.pendingItems(queue)
+    : normalizeHrReplyQueue(queue).filter((item) => ["pending", "needs_user"].includes(item.status));
 }
 
 function renderHrReplyState(state = {}) {
@@ -465,7 +469,7 @@ async function sendMessageToBossPage(message) {
   } catch (e) {
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      files: ["config.js", "content.js"],
+      files: ["config.js", "hr_reply_discovery.js", "content.js"],
     });
     setStatus("正在连接 BOSS 页面...");
     return chrome.tabs.sendMessage(tab.id, message);
