@@ -7,6 +7,7 @@ Agent 2: 技能匹配员，对照 skills.json 生成结构化匹配报告。
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import copy
@@ -26,6 +27,9 @@ _LLM_CACHE: Any | None = None
 _LLM_CACHE_LOCK = threading.Lock()
 _RESUME_PROFILE_CACHE: dict[str, dict[str, Any] | None] = {}
 _RESUME_PROFILE_LOCK = threading.Lock()
+_LOGGER = logging.getLogger("uvicorn.error")
+CHAT_REPLY_LLM_MAX_TIMEOUT_SECONDS = 15.0
+CHAT_REPLY_LLM_MIN_TIMEOUT_SECONDS = 0.1
 
 
 class JDRequirement(BaseModel):
@@ -2439,7 +2443,7 @@ def _build_project_chat_reply(
     reason = _evidence_reply_reason(relation, base_reason)
 
     if _use_chat_reply_llm() and llm is not False:
-        remaining = max(0.1, min(float(llm_timeout_seconds), 4.0) - (time.perf_counter() - started))
+        remaining = _chat_reply_llm_remaining_budget(llm_timeout_seconds, started)
         try:
             active_llm = llm if llm is not None else make_chat_model(json_mode=True, timeout=remaining, max_retries=0)
             llm_draft = _generate_chat_reply_with_llm(
@@ -2453,7 +2457,12 @@ def _build_project_chat_reply(
             )
             if llm_draft:
                 draft = llm_draft
-        except Exception:
+        except Exception as exc:
+            _LOGGER.warning(
+                "chat_reply_llm_failed error_type=%s timeout_seconds=%.3f",
+                type(exc).__name__,
+                remaining,
+            )
             reply_mode = "fallback"
             draft = _local_evidence_chat_reply(intent, hr_message, evidence, relation, job_title=job_title, company=company)
             reason = reason + " LLM 生成失败或超时，已使用本地证据模板兜底。"
@@ -2470,6 +2479,16 @@ def _build_project_chat_reply(
         "draft": draft,
         "reason": reason,
     }
+
+
+def _chat_reply_llm_remaining_budget(llm_timeout_seconds: float, started: float) -> float:
+    try:
+        configured = float(llm_timeout_seconds)
+    except (TypeError, ValueError):
+        configured = 4.0
+    budget = min(configured, CHAT_REPLY_LLM_MAX_TIMEOUT_SECONDS)
+    elapsed = max(0.0, time.perf_counter() - started) if started else 0.0
+    return max(CHAT_REPLY_LLM_MIN_TIMEOUT_SECONDS, budget - elapsed)
 
 
 def _collect_chat_reply_evidence(
