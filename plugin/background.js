@@ -1,8 +1,8 @@
 // background.js - forwards backend requests from BOSS pages.
 //
-// Content scripts run inside the BOSS page context. When BOSS is HTTPS but the
-// demo backend is a temporary HTTP IP, direct page-side fetch can be blocked by
-// the browser. The extension background worker owns the network request instead.
+// Content scripts run inside the BOSS page context. Cross-origin backend requests
+// can be blocked by browser page policies, so the extension background worker owns
+// the network request instead.
 
 "use strict";
 

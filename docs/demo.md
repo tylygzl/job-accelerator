@@ -22,13 +22,10 @@ docs/assets/
 4. `auto-apply-dialog.png`
    点击「立即沟通」后的 BOSS 弹窗：展示插件会自动选择「留在此页」继续处理下一条。
 
-5. `health-check-public.png`
-   浏览器打开后端健康检查：展示 `success=true`、`data.ok=true`、并发限制、LLM 配置和 Trace 状态。
-
-6. `trace-log-public.png`
+5. `trace-log-public.png`
    服务端 Trace 日志或 `logs/match_trace.jsonl` 的打码截图：展示一次请求包含分数、技能、LLM 调用状态、错误和耗时。
 
-7. `eval-summary-public.png`
+6. `eval-summary-public.png`
    `python eval_accuracy.py --summary-json` 的终端截图，展示固定 JD 回归评测通过率。
 
 ## 推荐 GIF
@@ -74,7 +71,6 @@ GIF 长度建议控制在 20-40 秒，只展示 2-3 个岗位，不要录完整�
 ![插件弹窗](docs/assets/popup-user.png)
 ![BOSS 插件面板](docs/assets/boss-panel.png)
 ![自动留在此页](docs/assets/auto-apply-dialog.png)
-![后端健康检查](docs/assets/health-check-public.png)
 ```
 
 如果图片还没补齐，不要提前在 README 里引用，避免 GitHub 页面出现破图。

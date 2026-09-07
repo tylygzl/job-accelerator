@@ -8,8 +8,8 @@
 
 - [免责声明](docs/disclaimer.md)
 - [安装和运行排错](docs/troubleshooting.md)
-- [阿里云部署说明](docs/cloud_deploy.md)
-- [在线 Demo 说明](docs/online_demo.md)
+- [云端部署说明](docs/cloud_deploy.md)
+- [演示与朋友包说明](docs/online_demo.md)
 - [后端 API 结构](docs/backend_api.md)
 - [准确率评估说明](docs/evaluation.md)
 - [Trace 日志 / 调用记录](docs/trace_logging.md)
@@ -18,17 +18,16 @@
 - [截图和 GIF 演示清单](docs/demo.md)
 - [旧入口说明](docs/legacy_entrypoints.md)
 
-## 在线 Demo
+## 演示与朋友包
 
-- 后端健康检查：`http://121.196.231.160/job-accelerator/health`
-- 完整插件体验：需要 Chrome 扩展、BOSS 登录态和私有访问令牌，不做公开免登录 Demo。
-- 朋友试用包：由 `scripts/build_friend_plugin.ps1` 生成 `release/plugin-cloud.zip`，只适合小范围发给可信用户测试。
+- 公开仓库不声明长期可用的在线后端，也不保存朋友测试环境的真实地址或访问令牌。
+- 本地启动后可访问 `http://127.0.0.1:8000/health` 检查后端状态。
+- 完整插件体验需要 Chrome 扩展、BOSS 登录态和私有朋友包，不做公开免登录 Demo。
+- 朋友包由 `scripts/build_friend_plugin.ps1` 生成，真实 HTTPS 地址和访问令牌只在打包时注入。
 
-在线 Demo 的详细边界见 [在线 Demo 说明](docs/online_demo.md)。真实 BOSS 页面截图和 GIF 需要打码后放到 `docs/assets/`，清单见 [截图和 GIF 演示清单](docs/demo.md)。
+演示边界见 [演示与朋友包说明](docs/online_demo.md)。真实 BOSS 页面截图和 GIF 需要打码后放到 `docs/assets/`，清单见 [截图和 GIF 演示清单](docs/demo.md)。
 
 ## 项目证据
-
-![云端后端健康检查](docs/assets/health-check-public.png)
 
 ![固定 JD 回归评测](docs/assets/eval-summary-public.png)
 
