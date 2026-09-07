@@ -1,0 +1,152 @@
+[
+  {
+    "name": "面试邀约走快速模板",
+    "request": {
+      "hr_message": "明天下午方便视频面试吗？"
+    },
+    "expect": {
+      "intent": "schedule_interview",
+      "evidence_relation": "none",
+      "risk_level": "low",
+      "should_fill": true,
+      "action_policy": "fill_draft",
+      "reply_mode": "fast_template"
+    }
+  },
+  {
+    "name": "普通可用性确认走快速模板",
+    "request": {
+      "hr_message": "在吗，方便先聊一下吗？"
+    },
+    "expect": {
+      "intent": "ask_availability",
+      "evidence_relation": "none",
+      "risk_level": "low",
+      "should_fill": true,
+      "action_policy": "fill_draft",
+      "reply_mode": "fast_template"
+    }
+  },
+  {
+    "name": "薪资和到岗高风险不自动填入",
+    "request": {
+      "hr_message": "你的期望薪资是多少，最快什么时候到岗？"
+    },
+    "expect": {
+      "intent": "salary",
+      "risk_level": "high",
+      "should_fill": false,
+      "action_policy": "ask_user",
+      "reply_mode": "fallback"
+    }
+  },
+  {
+    "name": "JD 和简历均有项目证据",
+    "request": {
+      "hr_message": "你有做过 RAG 项目吗？",
+      "jd_text": "岗位要求：熟悉 RAG、向量检索和 LLM API。",
+      "resume_profile": {
+        "skills": {
+          "must_have": [
+            {
+              "skill": "RAG",
+              "level": "项目经验",
+              "evidence": "做过 rag-engine，包含文档切分、向量检索和评测。"
+            }
+          ],
+          "familiar": []
+        },
+        "projects": []
+      }
+    },
+    "expect": {
+      "intent": "ask_project",
+      "evidence_relation": "jd_and_resume",
+      "risk_level": "medium",
+      "should_fill": true,
+      "action_policy": "fill_draft",
+      "reply_mode": "rag_llm"
+    }
+  },
+  {
+    "name": "外部证据支持项目回复",
+    "request": {
+      "hr_message": "可以简单说一下你做 Agent 项目时怎么处理工具调用吗？",
+      "evidence_context": "job-accelerator：后端用 FastAPI 提供匹配接口；Agent 流程中将页面读取、JD 匹配和沟通动作拆开，工具调用失败时走本地兜底。",
+      "evidence_sources": ["job-accelerator"]
+    },
+    "expect": {
+      "intent": "interview_question",
+      "evidence_relation": "rag_supported",
+      "risk_level": "medium",
+      "should_fill": true,
+      "action_policy": "fill_draft",
+      "reply_mode": "rag_llm"
+    }
+  },
+  {
+    "name": "JD 有要求但没有候选人证据",
+    "request": {
+      "hr_message": "你能讲一下 RAG 召回优化怎么做的吗？",
+      "jd_text": "岗位要求：熟悉 RAG 召回优化。"
+    },
+    "expect": {
+      "intent": "interview_question",
+      "evidence_relation": "jd_only",
+      "risk_level": "medium",
+      "should_fill": false,
+      "action_policy": "ask_user",
+      "reply_mode": "fallback"
+    }
+  },
+  {
+    "name": "面试题完全缺少证据时高风险",
+    "request": {
+      "hr_message": "详细讲讲你做过的推荐系统架构和线上指标优化。"
+    },
+    "expect": {
+      "intent": "interview_question",
+      "evidence_relation": "none",
+      "risk_level": "high",
+      "should_fill": false,
+      "action_policy": "ask_user",
+      "reply_mode": "fallback"
+    }
+  },
+  {
+    "name": "远程和驻场边界不替用户决定",
+    "request": {
+      "hr_message": "这个岗位需要驻场，偶尔出差，可以接受吗？"
+    },
+    "expect": {
+      "intent": "location",
+      "risk_level": "high",
+      "should_fill": false,
+      "action_policy": "ask_user",
+      "reply_mode": "fallback"
+    }
+  },
+  {
+    "name": "候选人已回复 Flutter Rust 问题时不重复生成草稿",
+    "request": {
+      "hr_message": "你有 Flutter 或 Rust 相关经验吗？",
+      "conversation": [
+        {
+          "role": "hr",
+          "content": "你有 Flutter 或 Rust 相关经验吗？"
+        },
+        {
+          "role": "candidate",
+          "content": "Flutter 和 Rust 目前不是我的主项目方向，我主要做 Python、FastAPI、RAG 和 Agent 相关项目。"
+        }
+      ],
+      "evidence_context": "job-accelerator：Python + FastAPI 后端；rag-engine：RAG 检索和评测。"
+    },
+    "expect": {
+      "should_fill": false,
+      "draft": "",
+      "action_policy": "no_action",
+      "reason_contains": "用户已回复，避免重复回复"
+    }
+  }
+]

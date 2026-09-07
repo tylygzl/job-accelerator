@@ -1,0 +1,102 @@
+{
+  "resume_text": "求职加速器项目：使用 Python、FastAPI、LangGraph、DeepSeek API、Chrome 插件实现 BOSS 岗位 JD 抓取、简历技能提取、岗位匹配、风险分级和定制开场白生成。项目包含 RAG 混合检索、RRF 融合、Prompt 结构化输出、缓存、CSV 导出和半自动沟通流程。GitHub 用户名 tylygzl。",
+  "cases": [
+    {
+      "id": "ai_agent_high",
+      "label": "AI Agent 高匹配",
+      "jd_text": "岗位：AI Agent 实习生\n公司：Takway AI\n职责：参与 AI Agent 应用开发，负责 Prompt 设计、工具调用、工作流编排和后端接口开发。\n要求：熟悉 Python、FastAPI、LangGraph 或 LangChain，有 DeepSeek/GPT API 接入经验，了解 RAG 检索增强生成。",
+      "expected_score_min": 75,
+      "expected_score_max": 100,
+      "require_opening": true
+    },
+    {
+      "id": "llm_app_high",
+      "label": "大模型应用高匹配",
+      "jd_text": "岗位：大模型应用开发实习生\n公司：深圳字节跳动\n职责：参与大模型应用原型开发，完成后端 API、浏览器插件和模型调用链路建设。\n要求：Python 基础扎实，熟悉 Prompt Engineering，了解 RAG、FastAPI、JavaScript 或 Chrome Extension，有 AI 应用项目经验优先。",
+      "expected_score_min": 70,
+      "expected_score_max": 100,
+      "require_opening": true
+    },
+    {
+      "id": "maoyuan_quant_agent_high",
+      "label": "量化 AI Agent 高匹配",
+      "jd_text": "岗位：AI Agent实习生\n公司：茂源量化\n职责：参与内部 AI Agent 工具开发，围绕投研和数据分析场景搭建多 Agent 工作流、Prompt 模板和网页原型。\n要求：熟悉 Python，有 LangGraph、DeepSeek API、Streamlit 或 FastAPI 项目经验，了解 RAG、工具调用和结构化输出。",
+      "expected_score_min": 75,
+      "expected_score_max": 100,
+      "require_opening": true
+    },
+    {
+      "id": "ones_agent_high",
+      "label": "ONES AI Agent 高匹配",
+      "jd_text": "岗位：AI Agent 开发实习生\n公司：ONES\n职责：参与企业协同场景的 AI Agent 开发，完成需求拆解、工作流编排、工具调用、后端接口接入和效果验证。\n要求：熟悉 Python、FastAPI、LangGraph 或 LangChain，有 DeepSeek/GPT API 接入经验，了解 Prompt Engineering、Git 协作和自动化测试。",
+      "expected_score_min": 75,
+      "expected_score_max": 100,
+      "require_opening": true
+    },
+    {
+      "id": "medical_robot_ai_app_mid",
+      "label": "医疗机器人 AI 应用中高匹配",
+      "jd_text": "岗位：ai应用实习生\n公司：爱博医疗机器人\n职责：参与医疗机器人业务中的 AI 应用原型开发，完成知识库问答、模型接口调用、数据处理和内部演示页面。\n要求：熟悉 Python，了解 LangGraph/Agent、DeepSeek 或大模型 API，有 Streamlit/FastAPI 项目经验；了解 PyTorch/TensorFlow 深度学习框架加分。",
+      "expected_score_min": 55,
+      "expected_score_max": 95,
+      "require_opening": true
+    },
+    {
+      "id": "jianying_llm_app_mid_high",
+      "label": "剪映大模型应用中高匹配",
+      "jd_text": "岗位：大模型应用实习生-剪映\n公司：深圳字节跳动\n职责：参与剪映相关大模型应用建设，开发 Prompt、后端 API、插件工具和效果评估流程，支持视频创作场景落地。\n要求：熟悉 Python 或 JavaScript，了解 FastAPI、Chrome Extension、RAG 或大模型 API；有剪映、视频处理或多媒体项目经验加分。",
+      "expected_score_min": 60,
+      "expected_score_max": 95,
+      "require_opening": true
+    },
+    {
+      "id": "content_audit_low",
+      "label": "内容审核低匹配",
+      "jd_text": "岗位：内容鉴审实习生\n公司：空间漫步\n职责：负责图文和短视频内容审核、违规内容标注、日报整理和基础运营协助。\n要求：细心稳定，能接受排班，对社区内容治理有兴趣，有审核或运营经验优先。",
+      "expected_score_min": 0,
+      "expected_score_max": 45,
+      "require_opening": false
+    },
+    {
+      "id": "drone_data_label_low",
+      "label": "无人机数据标注低匹配",
+      "jd_text": "岗位：无人机 AI 数据标注实习生\n公司：天空领域\n职责：负责无人机图像和视频数据标注、目标框绘制、样本质检、标注规范整理和数据交付。\n要求：细心耐心，能熟练使用标注工具，了解无人机或计算机视觉基础优先，不要求后端开发或 Agent 项目经验。",
+      "expected_score_min": 0,
+      "expected_score_max": 45,
+      "require_opening": false
+    },
+    {
+      "id": "sales_training_low",
+      "label": "销售培训低匹配",
+      "jd_text": "岗位：实习生 包住+带薪培训\n公司：六禄投资\n职责：电话沟通客户、线下邀约、销售转化和团队培训。\n要求：表达外向，抗压强，接受销售性质工作，有保险、教育培训或地推经验优先。",
+      "expected_score_min": 0,
+      "expected_score_max": 35,
+      "require_opening": false
+    },
+    {
+      "id": "ai_course_sales_low",
+      "label": "AI 课程销售低匹配",
+      "jd_text": "岗位：AI 课程顾问实习生\n公司：课匠堂\n职责：电话邀约客户、介绍 AI 课程、完成销售转化和社群运营。\n要求：表达能力强，能接受销售目标，有教育培训或课程顾问经验优先，了解 AI 工具更好。",
+      "expected_score_min": 0,
+      "expected_score_max": 35,
+      "require_opening": false
+    },
+    {
+      "id": "robot_rl_mid_low",
+      "label": "机器人算法偏低匹配",
+      "jd_text": "岗位：算法实习生-模仿学习\n公司：深信服科技\n职责：参与机器人控制、模仿学习、行为克隆和强化学习算法实验。\n要求：熟悉 PyTorch 或 TensorFlow，了解强化学习、模仿学习、机器人运动规划，有论文复现或算法竞赛经验优先。",
+      "expected_score_min": 0,
+      "expected_score_max": 55,
+      "require_opening": false
+    },
+    {
+      "id": "robot_rl_candidate_high",
+      "label": "机器人候选人高匹配",
+      "resume_text": "机器人强化学习方向简历：使用 Python、PyTorch、PPO、DQN、SAC、MuJoCo、Isaac Gym、ROS、MoveIt 和 Gazebo 做机器人控制实验；复现模仿学习、行为克隆和强化学习论文，完成机械臂抓取和运动规划项目。GitHub 用户名 tylygzl。",
+      "jd_text": "岗位：算法实习生-模仿学习\n公司：深信服科技\n职责：参与机器人控制、模仿学习、行为克隆和强化学习算法实验。\n要求：熟悉 PyTorch 或 TensorFlow，了解强化学习、模仿学习、机器人运动规划，有论文复现或算法竞赛经验优先。",
+      "expected_score_min": 70,
+      "expected_score_max": 100,
+      "require_opening": true
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "summary": {
+    "mode": "local",
+    "total": 12,
+    "passed": 12,
+    "failed": 0,
+    "pass_rate": 100.0,
+    "average_score": 58.0,
+    "average_seconds": 0.0,
+    "opening_checked": 12,
+    "opening_ok": 12
+  },
+  "failures": []
+}

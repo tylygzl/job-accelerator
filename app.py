@@ -1,6 +1,8 @@
 """求职加速器 · Streamlit 网页版"""
 import streamlit as st
 import os
+import re
+from uuid import uuid4
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -8,7 +10,7 @@ os.environ["LANGSMITH_TRACING"] = "false"
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
 from deepagents import create_deep_agent
-from langchain_openai import ChatOpenAI
+from pipeline import make_chat_model
 
 # ── 页面设置 ──
 st.set_page_config(page_title="求职加速器", page_icon="🚀", layout="wide")
@@ -18,7 +20,7 @@ st.caption("贴 JD + 经历 + 公司名，告诉你投不投、怎么准备。")
 # 隐私说明
 with st.expander("🔒 隐私说明", expanded=False):
     st.markdown("""
-    - 所有处理在**你的电脑上本地完成**，不会上传到任何服务器
+    - JD、个人经历和公司名会发送到你配置的 LLM API 进行模型分析
     - 不收集、不存储、不分享你的简历或个人数据
     - 关闭页面后数据自动清除
     - 仅在你点击"开始评估"时调用 AI 模型处理内容
@@ -61,24 +63,12 @@ mode = st.radio(
 @st.cache_resource
 def get_jd_check_model():
     """轻量模型，只做 JD 有效性筛查"""
-    return ChatOpenAI(
-        model=os.environ.get("MODEL_NAME", "deepseek-chat"),
-        api_key=os.environ.get("DEEPSEEK_API_KEY"),
-        base_url="https://api.deepseek.com/v1",
-        temperature=0,
-        timeout=15,
-    )
+    return make_chat_model(temperature=0, timeout=15, required=True)
 
 
 @st.cache_resource
 def get_agent():
-    model = ChatOpenAI(
-        model=os.environ.get("MODEL_NAME", "deepseek-chat"),
-        api_key=os.environ.get("DEEPSEEK_API_KEY"),
-        base_url="https://api.deepseek.com/v1",
-        temperature=0,
-        timeout=60,
-    )
+    model = make_chat_model(temperature=0, timeout=60, required=True)
 
     jd_analyzer = {
         "name": "jd-analyzer",
@@ -138,6 +128,12 @@ def get_agent():
     )
 
 
+def is_yes_answer(line: str) -> bool:
+    clean = re.sub(r"^\s*(?:\d+|[一二三四五六七八九十]+)[\.、):：]?\s*", "", line or "")
+    clean = clean.strip(" \t。.!！")
+    return clean.startswith("是")
+
+
 # ── 运行按钮 ──
 if st.button("🔍 开始评估", type="primary", use_container_width=True):
     if not jd_text.strip():
@@ -163,8 +159,9 @@ if st.button("🔍 开始评估", type="primary", use_container_width=True):
             check_result = check_model.invoke(check_prompt)
             check_text = str(check_result.content)
 
-        jd_ok = "是" in check_text.split("\n")[0] if check_text else False
-        resume_ok = "是" in check_text.split("\n")[-1] if check_text else False
+        check_lines = [line.strip() for line in check_text.splitlines() if line.strip()]
+        jd_ok = is_yes_answer(check_lines[0]) if len(check_lines) >= 1 else False
+        resume_ok = is_yes_answer(check_lines[-1]) if len(check_lines) >= 2 else False
 
         if not jd_ok:
             st.error("❌ 粘贴的内容不像一个岗位描述。请确认你贴的是招聘 JD。")
@@ -200,11 +197,12 @@ if st.button("🔍 开始评估", type="primary", use_container_width=True):
         with st.spinner(wait_msg):
             try:
                 import concurrent.futures
+                thread_id = str(uuid4())
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(
                         agent.invoke,
                         {"messages": [{"role": "user", "content": user_input}]},
-                        {"configurable": {"thread_id": "1"}},
+                        {"configurable": {"thread_id": thread_id}},
                     )
                     result = future.result(timeout=180)
 

@@ -7,8 +7,7 @@ load_dotenv()
 os.environ["LANGSMITH_TRACING"] = "false"
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 
-from langchain_openai import ChatOpenAI
-from pipeline import filter_and_match, generate_interview_prep
+from pipeline import filter_and_match, generate_interview_prep, make_chat_model
 import subprocess, json, os, sys
 
 # ── 模拟数据（Playwright 未安装时的后备） ──
@@ -72,11 +71,7 @@ if st.button("🔍 开始搜索", type="primary", use_container_width=True):
     
     with st.status("搜索中...", expanded=True) as status:
         # 初始化 LLM
-        llm = ChatOpenAI(
-            model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
-            api_key=os.getenv("DEEPSEEK_API_KEY"),
-            base_url="https://api.deepseek.com"
-        )
+        llm = make_chat_model(temperature=0)
         
         if use_real_search:
             result_file = "search_results.json"

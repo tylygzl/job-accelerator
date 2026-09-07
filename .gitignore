@@ -2,7 +2,17 @@
 .env
 search_results.json
 shixiseng_profile/
+release/
+output/
+tmp/
+logs/
+.deploy_tools/
 .venv/
 __pycache__/
 *.pyc
+*.log
+codex-review.jsonl
+tests/manual_eval_results.csv
+server.out.log
+server.err.log
 .DS_Store

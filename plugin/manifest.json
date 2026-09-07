@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "求职加速器",
+  "version": "0.2.3",
+  "description": "BOSS 直聘岗位海投、筛选与沟通草稿助手",
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": [
+    "*://*.zhipin.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "打开海投助手",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.zhipin.com/*"],
+      "js": ["config.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

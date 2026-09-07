@@ -1,0 +1,31 @@
+{
+  "name": "郭震霖",
+  "role": "AI应用开发实习生",
+  "skills": {
+    "must_have": [
+      {"skill": "Python", "level": "熟练", "evidence": "RAG引擎六层管线+餐盘日记后端+评测系统，全Python开发"},
+      {"skill": "FastAPI", "level": "熟练", "evidence": "3个FastAPI服务部署至阿里云，含JWT鉴权和限速"},
+      {"skill": "RAG检索增强生成", "level": "熟练", "evidence": "从零搭建混合检索引擎，BM25+余弦+RRF融合，400chunks评测55%命中率"},
+      {"skill": "Prompt工程", "level": "熟练", "evidence": "结构化输出设计，幻觉控制阈值<0.015，sources强制引用"},
+      {"skill": "Git/GitHub", "level": "熟练", "evidence": "4个仓库线上，含README+评测数据+安全审查记录"},
+      {"skill": "SQL/SQLite", "level": "掌握", "evidence": "SQL Agent全链路，危险语句拦截，JWT系统SQLite存储"},
+      {"skill": "Docker/Nginx/部署", "level": "掌握", "evidence": "5服务部署阿里云，Nginx反向代理+UFW+systemd+自动备份"}
+    ],
+    "familiar": [
+      {"skill": "LangGraph多Agent", "level": "了解", "evidence": "求职加速器Supervisor编排3个Agent"},
+      {"skill": "微信小程序开发", "level": "了解", "evidence": "餐盘日记独立开发上线，已通过微信审核"},
+      {"skill": "JavaScript", "level": "了解", "evidence": "BOSS直聘Chrome插件开发"},
+      {"skill": "Embedding/向量检索", "level": "了解", "evidence": "BGE-M3+硅基流动API，余弦+BM25混合检索"}
+    ]
+  },
+  "weaknesses": [
+    {"area": "微调/Fine-tuning", "reason": "未涉及"},
+    {"area": "K8s/容器编排", "reason": "仅Docker单机部署"},
+    {"area": "分布式系统", "reason": "无相关经验"},
+    {"area": "算法/数据结构", "reason": "非科班背景，需补基础"}
+  ],
+  "projects": [
+    {"name": "RAG知识库引擎", "keywords": ["RAG", "FastAPI", "评测", "部署", "混合检索"]},
+    {"name": "餐盘日记小程序", "keywords": ["微信小程序", "JWT", "FastAPI", "全栈"]}
+  ]
+}
