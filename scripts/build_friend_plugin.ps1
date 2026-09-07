@@ -1,5 +1,5 @@
 param(
-    [string]$ApiUrl = "http://121.196.231.160/job-accelerator/match",
+    [string]$ApiUrl = $env:JOB_ACCELERATOR_API_URL,
     [string]$ApiToken = $env:JOB_ACCELERATOR_ACCESS_TOKEN,
     [string]$OutputDir = "release/plugin-cloud",
     [switch]$ReuseExistingToken,
@@ -15,6 +15,25 @@ $zipPath = "$targetDir.zip"
 $targetFull = [System.IO.Path]::GetFullPath($targetDir)
 $zipFull = [System.IO.Path]::GetFullPath($zipPath)
 $existingConfig = Join-Path $targetFull "config.js"
+
+if ([string]::IsNullOrWhiteSpace($ApiUrl)) {
+    throw "ApiUrl is required. Set `$env:JOB_ACCELERATOR_API_URL or pass -ApiUrl."
+}
+
+$parsedApiUrl = $null
+if (-not [Uri]::TryCreate($ApiUrl, [UriKind]::Absolute, [ref]$parsedApiUrl) -or $parsedApiUrl.Scheme -notin @("http", "https")) {
+    throw "ApiUrl must be an absolute http or https URL."
+}
+
+if ($parsedApiUrl.Scheme -ne "https") {
+    Write-Warning "ApiUrl uses HTTP. Access tokens and resume content can be exposed in transit."
+}
+
+$transportNote = if ($parsedApiUrl.Scheme -eq "https") {
+    "- This package uses HTTPS. Keep the package private because it contains its access token."
+} else {
+    "- This package uses HTTP. Access tokens and resume content can be exposed in transit; use it only for isolated testing."
+}
 
 if (-not (Test-Path $pluginDir)) {
     throw "plugin directory not found: $pluginDir"
@@ -44,14 +63,25 @@ New-Item -ItemType Directory -Force -Path $targetFull | Out-Null
 Copy-Item -Path (Join-Path $pluginDir "*") -Destination $targetFull -Recurse -Force
 
 $configPath = Join-Path $targetFull "config.js"
+$apiUrlJson = ConvertTo-Json -Compress -InputObject $ApiUrl
+$apiTokenJson = ConvertTo-Json -Compress -InputObject $ApiToken
 $configContent = @(
     "// Private friend-build config. Do not commit or publish this file if it contains API_TOKEN."
     "window.JOB_ACCELERATOR_CONFIG = {"
-    "  DEFAULT_API: `"$ApiUrl`","
-    "  API_TOKEN: `"$ApiToken`","
+    "  DEFAULT_API: $apiUrlJson,"
+    "  API_TOKEN: $apiTokenJson,"
     "};"
 )
 Set-Content -LiteralPath $configPath -Encoding UTF8 -Value $configContent
+
+$manifestPath = Join-Path $targetFull "manifest.json"
+$manifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifestPath | ConvertFrom-Json
+$apiHostPermission = "{0}://{1}/*" -f $parsedApiUrl.Scheme, $parsedApiUrl.Host
+$hostPermissions = @($manifest.host_permissions)
+if ($apiHostPermission -notin $hostPermissions) {
+    $manifest.host_permissions = @($hostPermissions + $apiHostPermission)
+}
+$manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 
 $readmePath = Join-Path $targetFull "README.txt"
 $readmeContent = @(
@@ -90,7 +120,7 @@ $readmeContent = @(
     ""
     "Privacy and risk:"
     "- Resume text and job descriptions are sent to the cloud backend for matching."
-    "- This is a temporary HTTP demo build for small-scale friend testing only."
+    $transportNote
     "- Do not publish this package. If connection fails, contact the person who shared it."
 )
 Set-Content -LiteralPath $readmePath -Encoding UTF8 -Value $readmeContent

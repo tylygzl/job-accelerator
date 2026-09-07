@@ -22,8 +22,8 @@ const checkHrReplyBtn = document.getElementById("checkHrReplyBtn");
 const hrReplyCountEl = document.getElementById("hrReplyCount");
 const hrReplyListEl = document.getElementById("hrReplyList");
 const PLUGIN_CONFIG = window.JOB_ACCELERATOR_CONFIG || {};
-const CLOUD_DEFAULT_API = "http://121.196.231.160/job-accelerator/match";
-const DEFAULT_API = normalizeApiUrl(PLUGIN_CONFIG.DEFAULT_API || CLOUD_DEFAULT_API, CLOUD_DEFAULT_API);
+const LOCAL_DEFAULT_API = "http://127.0.0.1:8000/match";
+const DEFAULT_API = normalizeApiUrl(PLUGIN_CONFIG.DEFAULT_API || LOCAL_DEFAULT_API, LOCAL_DEFAULT_API);
 const DEFAULT_API_TOKEN = PLUGIN_CONFIG.API_TOKEN || "";
 const DEFAULT_MIN_SCORE = 80;
 const DEFAULT_DAILY_GOAL = 100;
@@ -103,7 +103,7 @@ popupTitleBarEl?.addEventListener("click", () => {
   });
 });
 
-function normalizeApiUrl(value, fallback = CLOUD_DEFAULT_API) {
+function normalizeApiUrl(value, fallback = LOCAL_DEFAULT_API) {
   const raw = String(value || "").trim();
   if (!raw) return fallback;
   try {
@@ -122,8 +122,7 @@ function resolveApiUrl(value) {
 function isStaleBackendUrl(value) {
   try {
     const host = new URL(value).hostname;
-    const defaultHost = new URL(DEFAULT_API).hostname;
-    return host === "localhost" || host === "127.0.0.1" || (host === "tengyuanlinye.cn" && host !== defaultHost);
+    return host === "localhost" || host === "127.0.0.1";
   } catch (_) {
     return false;
   }

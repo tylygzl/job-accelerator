@@ -1,23 +1,23 @@
-# 阿里云部署说明
+# 云端部署说明
 
-目标：把 FastAPI 后端放到你的阿里云服务器上，朋友只安装你打包好的 Chrome 插件，不需要本地跑 Python，也不需要配置 LLM API。
+目标：把 FastAPI 后端部署到 Linux 云服务器，朋友只安装你打包好的 Chrome 插件，不需要本地跑 Python，也不需要配置 LLM API。
 
 ## 最终结构
 
 ```text
 朋友 Chrome 插件
-  -> http://121.196.231.160/job-accelerator/match
-  -> 阿里云 Nginx
+  -> https://your-domain.example/job-accelerator/match
+  -> HTTPS / Nginx
   -> 127.0.0.1:8000 FastAPI
   -> 服务器 .env 里的 LLM_API_KEY
 ```
 
 插件里不能放 LLM API Key。LLM Key 只放服务器 `.env`。
-当前朋友测试包使用临时 HTTP IP 入口；`https://tengyuanlinye.cn/job-accelerator/` 是备案和证书处理完成后的目标入口。
+朋友测试环境的真实地址和访问令牌只在私下打包时注入，不写入公开仓库。
 
 ## 服务器准备
 
-在阿里云安全组里开放：
+在云服务器安全组里开放：
 
 - `80`
 - `443`
@@ -130,7 +130,7 @@ job_accelerator event=match_http_error request_id=... client=... mode=fast statu
 
 ## Nginx 反向代理
 
-把 `deploy/nginx-job-accelerator.conf` 里的 `location /job-accelerator/ { ... }` 加到 `tengyuanlinye.cn` 对应的 `server {}` 里。
+把 `deploy/nginx-job-accelerator.conf` 里的 `location /job-accelerator/ { ... }` 加到你的 HTTPS 域名对应的 `server {}` 里。
 
 检查并重载：
 
@@ -142,7 +142,7 @@ sudo systemctl reload nginx
 测试：
 
 ```bash
-curl http://121.196.231.160/job-accelerator/health
+curl https://your-domain.example/job-accelerator/health
 ```
 
 如果返回 `auth_required:true`，说明后端已经要求访问令牌。`limits` 和 `runtime` 字段可以用来观察当前并发配置、正在处理的请求数和累计请求数。
@@ -150,7 +150,7 @@ curl http://121.196.231.160/job-accelerator/health
 测试 `/match`：
 
 ```bash
-curl -X POST http://121.196.231.160/job-accelerator/match \
+curl -X POST https://your-domain.example/job-accelerator/match \
   -H "Content-Type: application/json" \
   -H "X-Job-Accelerator-Token: 你的访问令牌" \
   -d '{"jd_text":"岗位：Python实习生，要求 FastAPI 和 LangGraph","resume_text":"我会 Python、FastAPI、LangGraph","mode":"fast"}'
@@ -161,6 +161,7 @@ curl -X POST http://121.196.231.160/job-accelerator/match \
 在你本机 PowerShell 里运行：
 
 ```powershell
+$env:JOB_ACCELERATOR_API_URL="https://your-domain.example/job-accelerator/match"
 $env:JOB_ACCELERATOR_ACCESS_TOKEN="你的访问令牌"
 powershell -ExecutionPolicy Bypass -File scripts/build_friend_plugin.ps1
 ```
@@ -183,10 +184,9 @@ release/plugin-cloud.zip
 - 如果朋友范围扩大，下一步要做账号登录、限流、额度统计和日志脱敏。
 - `.env` 永远不要提交到 Git。
 
-## 本次阿里云实测记录
+## 历史部署记录
 
-- `job-accelerator.service` 已配置为 systemd 服务，监听 `127.0.0.1:8000`，服务器重启后会自动启动。
-- Nginx 已添加 `/job-accelerator/` 反代，公网 IP 的 HTTP 入口可访问：`http://121.196.231.160/job-accelerator/health`。
-- `/match` 已开启 `JOB_ACCELERATOR_ACCESS_TOKEN` 保护；服务器内部测试不带令牌返回 `401`，带令牌返回匹配结果。
-- `https://tengyuanlinye.cn/job-accelerator/health` 暂时不可用，原因是阿里云对未备案/备案不合规域名返回 `Non-compliance ICP Filing`，Let's Encrypt 无法完成 HTTP 验证。
-- 给朋友长期使用时，推荐先解决 HTTPS：完成域名备案、换已备案域名、换海外服务器，或使用可靠的 HTTPS 隧道/网关。只有 HTTP IP 可作为短期演示方案，令牌会明文传输，不适合公开分发。
+- 早期曾在独立云服务器上完成 systemd、Nginx、鉴权和 `/health`、`/match` 路由验证。
+- 早期 HTTP IP 已退出当前正式环境，不再作为在线 Demo 或朋友包默认值。
+- 当前朋友测试环境的地址和凭据保持私有；公开仓库只保留可复用的部署步骤。
+- 扩大分发前仍需对当前环境单独验证 HTTPS、鉴权、限流和日志脱敏，不能沿用早期部署结论。
