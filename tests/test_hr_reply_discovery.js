@@ -294,7 +294,48 @@ const newer = item({ latest_hr_message: "The interview is tomorrow.", time_text:
 const updatedQueue = discovery.mergeQueueCandidate(repeatedQueue, [newer], { now: "2026-08-03T00:01:00.000Z" });
 assert.strictEqual(updatedQueue.length, 1);
 assert.strictEqual(updatedQueue[0].id, repeated.id);
-assert.strictEqual(updatedQueue[0].latest_hr_message, newer.latest_hr_message);
+assert.strictEqual(updatedQueue[0].latest_hr_message, undefined);
+assert.strictEqual(updatedQueue[0].message_summary, "收到新的 HR 回复");
+
+const privateCandidate = item({
+  latest_hr_message: "Call PHONE-PRIVATE-MARKER or EMAIL-PRIVATE-MARKER about the interview.",
+  queued_latest_hr_message: "Previous private body",
+  message_summary: "Do not persist this private summary",
+});
+const privacySafeQueue = discovery.mergeQueueCandidate([], [privateCandidate], { now: "2026-08-03T00:01:30.000Z" });
+const serializedPrivacySafeQueue = JSON.stringify(privacySafeQueue);
+assert.strictEqual(privacySafeQueue[0].latest_hr_message, undefined);
+assert.strictEqual(privacySafeQueue[0].queued_latest_hr_message, undefined);
+assert.strictEqual(privacySafeQueue[0].message_summary, "收到新的 HR 回复");
+assert.strictEqual(serializedPrivacySafeQueue.includes("PHONE-PRIVATE-MARKER"), false);
+assert.strictEqual(serializedPrivacySafeQueue.includes("EMAIL-PRIVATE-MARKER"), false);
+assert.strictEqual(serializedPrivacySafeQueue.includes("Do not persist"), false);
+
+const initialQueueAtLimit = Array.from({ length: 30 }, (_, index) => ({
+  ...item({
+    data_hint: `data-key:limit-${index}`,
+    latest_hr_message: `Queue message ${index}`,
+  }),
+  firstSeenAt: `2026-08-03T00:${String(index).padStart(2, "0")}:00.000Z`,
+  updatedAt: `2026-08-03T00:${String(index).padStart(2, "0")}:00.000Z`,
+}));
+const refreshedOldest = item({
+  data_hint: "data-key:limit-0",
+  latest_hr_message: "Queue message 0 refreshed",
+});
+const newestAtLimit = item({
+  data_hint: "data-key:limit-30",
+  latest_hr_message: "Queue message 30",
+});
+const queueAfterRefreshAtLimit = discovery.mergeQueueCandidate(
+  initialQueueAtLimit,
+  [refreshedOldest, newestAtLimit],
+  { now: "2026-08-03T01:00:00.000Z", limit: 30 },
+);
+assert.strictEqual(queueAfterRefreshAtLimit.length, 30);
+assert.strictEqual(queueAfterRefreshAtLimit.some((entry) => entry.id === refreshedOldest.id), true);
+assert.strictEqual(queueAfterRefreshAtLimit.some((entry) => entry.id === newestAtLimit.id), true);
+assert.strictEqual(queueAfterRefreshAtLimit.some((entry) => entry.id === initialQueueAtLimit[1].id), false);
 
 const needsUser = { ...repeated, status: "needs_user" };
 const preservedNeedsUser = discovery.mergeQueueCandidate([needsUser], [repeated], { now: "2026-08-03T00:02:00.000Z" });
@@ -405,7 +446,8 @@ const migratedChangedMessage = discovery.mergeQueueCandidate(
 assert.strictEqual(migratedChangedMessage.length, 1);
 assert.strictEqual(migratedChangedMessage[0].id, "legacy-queue-item");
 assert.strictEqual(migratedChangedMessage[0].status, "pending");
-assert.strictEqual(migratedChangedMessage[0].latest_hr_message, "New question");
+assert.strictEqual(migratedChangedMessage[0].latest_hr_message, undefined);
+assert.strictEqual(migratedChangedMessage[0].message_summary, "收到新的 HR 回复");
 
 const stableExisting = {
   ...stableFresh,

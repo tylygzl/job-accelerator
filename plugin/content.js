@@ -18,10 +18,12 @@
   const PENDING_CHAT_KEY = "job_accelerator_pending_chat";
   const HR_REPLY_QUEUE_KEY = "job_accelerator_hr_reply_queue";
   const HR_REPLY_ACTIVE_TASK_KEY = "job_accelerator_hr_reply_active_task";
+  const HR_REPLY_GLOBAL_LOCK_KEY = "job_accelerator_hr_reply_global_lock";
   const HR_REPLY_DEBUG_FLAG_KEY = "debug_hr_reply";
   const HR_REPLY_DEBUG_SOURCE = "debug_current_chat";
   const DEBUG_FLAG_READ_MAX_ATTEMPTS = 3;
   const DEBUG_FLAG_RETRY_DELAY_MS = 200;
+  const TASK_COORDINATION_TIMEOUT_MS = 5 * 1000;
   const CHAT_HELPER_ID = "job-accelerator-chat-helper";
   const AUTO_OPEN_KEY = "job_accelerator_auto";
   const AUTO_APPLY_KEY = "job_accelerator_auto_apply";
@@ -183,6 +185,10 @@
         .catch((error) => sendResponse({ ok: false, error: error?.message || String(error) }));
       return true;
     }
+    if (request.action === "jobAccelerator.pauseAutoApplyForHrReply") {
+      sendResponse({ ok: true, paused: pauseLocalAutoApplyForHrReply() });
+      return false;
+    }
     return false;
   });
 
@@ -218,6 +224,9 @@
       debugFlagLoadAttempt = 1;
       refreshDebugHrReplyButton();
       renderRuntimeState();
+    }
+    if (changes[HR_REPLY_GLOBAL_LOCK_KEY]?.newValue) {
+      pauseLocalAutoApplyForHrReply();
     }
     if (shouldRefresh && panel && panelMode === "jobs") {
       const jobs = latestJobs.length ? latestJobs : sessionJobList();
@@ -794,6 +803,11 @@
 
   async function startAutoApplyFromMessage(applyMode) {
     if (!isBossSearchPage()) throw new Error("当前不是 BOSS 岗位搜索页");
+    const blockReason = await autoApplyGlobalBlockReason();
+    if (blockReason) {
+      pauseLocalAutoApplyForHrReply();
+      throw new Error(blockReason);
+    }
     clearLastError();
     setLastAction(`准备启动${applyModeTitle(applyMode)}`, "等待海投扫描当前页面。");
     activeApplyMode = normalizeApplyMode(applyMode);
@@ -1566,7 +1580,7 @@ ${runtimeStateHtml()}
       evidence.company,
       evidence.latest_hr_message,
     ].filter(Boolean).join("|"))}`;
-    return {
+    const item = {
       id,
       debug: true,
       source: HR_REPLY_DEBUG_SOURCE,
@@ -1588,6 +1602,9 @@ ${runtimeStateHtml()}
       firstSeenAt: now,
       updatedAt: now,
     };
+    item.conversationFingerprint = HR_REPLY_DISCOVERY?.makeConversationFingerprint(item) || "";
+    item.messageFingerprint = HR_REPLY_DISCOVERY?.makeMessageFingerprint(item) || "";
+    return item;
   }
 
   async function renderChatAssistant(prefix = "") {
@@ -1639,7 +1656,7 @@ ${runtimeStateHtml()}
       return `<div class="reply-item${done ? " done" : ""}">
   <div class="reply-title">${esc(item.hr_name || "未知 HR")}</div>
   <div class="reply-meta">${esc(meta)}</div>
-  <div class="reply-last">${esc(item.latest_hr_message || "未读消息")}</div>
+  <div class="reply-last">${esc(item.message_summary || "收到新的 HR 回复")}</div>
   <div class="reply-actions">
     <button type="button" data-hr-reply-id="${esc(item.id)}">处理回复</button>
     <span class="reply-state">${esc(state)}</span>
@@ -2250,11 +2267,11 @@ ${runtimeStateHtml()}
       await renderChatAssistant(message);
       return { ok: false, error: message };
     }
-    const pausedInfo = pauseAutoApplyForHrReply();
-
+    let pausedInfo = { paused: false, globalLockToken: "" };
     hrReplyProcessing = true;
     renderRuntimeState();
     try {
+      pausedInfo = await pauseAutoApplyForHrReply();
       clearLastError();
       if (pausedInfo.paused) await renderChatAssistant("已暂停海投，正在处理 HR 回复。");
 
@@ -2323,6 +2340,9 @@ ${runtimeStateHtml()}
         await renderChatAssistant(message);
         return { ok: false, error: message };
       }
+      if (chatInputText(findChatInput())) {
+        return stopHrReplyBecauseInputHasDraft(item);
+      }
 
       const reply = await requestChatReply(requestEvidence);
       const responseEvidence = extractCurrentChatEvidence(item);
@@ -2343,20 +2363,48 @@ ${runtimeStateHtml()}
       await renderChatAssistant(message);
       return { ok: false, error: message };
     } finally {
+      await releaseGlobalHrReplyTask(pausedInfo.globalLockToken);
       hrReplyProcessing = false;
       renderRuntimeState();
       releaseTaskLock(lock);
     }
   }
 
-  function pauseAutoApplyForHrReply() {
-    const pausedAutoApply = isAutoApplyBusy();
-    if (pausedAutoApply) {
-      disableAutoApplyTask();
-      cancelActiveAnalysis();
-      setPaused(true);
+  async function pauseAutoApplyForHrReply() {
+    const pausedLocal = pauseLocalAutoApplyForHrReply();
+    if (!canUseBackgroundRequest()) return { paused: pausedLocal, globalLockToken: "" };
+
+    const result = await sendRuntimeMessageWithTimeout({
+      action: "jobAccelerator.beginHrReplyTask",
+    }, TASK_COORDINATION_TIMEOUT_MS);
+    if (!result?.ok || !result.lockToken) {
+      throw new Error(result?.error || "无法确认其他 BOSS 标签页已暂停，未处理 HR 回复。");
     }
-    return { paused: pausedAutoApply };
+    return {
+      paused: pausedLocal || Number(result.pausedCount || 0) > 0,
+      globalLockToken: result.lockToken,
+    };
+  }
+
+  function pauseLocalAutoApplyForHrReply() {
+    const pausedAutoApply = isAutoApplyBusy();
+    if (!pausedAutoApply) return false;
+    disableAutoApplyTask();
+    cancelActiveAnalysis();
+    setPaused(true);
+    return true;
+  }
+
+  async function releaseGlobalHrReplyTask(lockToken) {
+    if (!lockToken || !canUseBackgroundRequest()) return;
+    try {
+      await sendRuntimeMessageWithTimeout({
+        action: "jobAccelerator.endHrReplyTask",
+        lockToken,
+      }, TASK_COORDINATION_TIMEOUT_MS);
+    } catch (_) {
+      // The background lock expires automatically if the service worker is unavailable.
+    }
   }
 
   function isDebugHrReplyItem(item) {
@@ -2377,6 +2425,14 @@ ${runtimeStateHtml()}
     forgetHrReplyTask();
     await renderChatAssistant(message);
     return { ok: true, filled: false, skipped: true, message };
+  }
+
+  async function stopHrReplyBecauseInputHasDraft(item) {
+    const message = "聊天输入框已有内容，未覆盖你的现有草稿；请先处理输入框内容后重试。";
+    if (item?.id) await markHrReplyQueueItem(item.id, "needs_user", message, { statusReason: "input_not_empty" });
+    forgetHrReplyTask();
+    await renderChatAssistant(message);
+    return { ok: false, filled: false, existingDraft: true, error: message, message };
   }
 
   async function openConversationFromQueueItem(item) {
@@ -2405,7 +2461,11 @@ ${runtimeStateHtml()}
       if (!cardItem) return false;
       const sameName = exactChatMatchValue(item.hr_name, cardItem.hr_name);
       const sameCompany = relatedChatMatchValue(item.company, cardItem.company);
-      const sameLatest = chatMessageMatches(item.latest_hr_message, cardItem.latest_hr_message);
+      const sameMessageFingerprint = Boolean(
+        compactChatMatchValue(item.messageFingerprint)
+        && compactChatMatchValue(item.messageFingerprint) === compactChatMatchValue(cardItem.messageFingerprint),
+      );
+      const sameLatest = sameMessageFingerprint || chatMessageMatches(item.latest_hr_message, cardItem.latest_hr_message);
       return sameName && sameCompany && sameLatest;
     }) || null;
   }
@@ -2445,7 +2505,11 @@ ${runtimeStateHtml()}
     const sameContext = hasComparableJobs
       ? relatedChatMatchValue(item.job_title, identity.job_title)
       : relatedChatMatchValue(item.company, identity.company);
-    const sameLatest = chatMessageMatches(item.latest_hr_message, evidence.latest_hr_message);
+    const sameMessageFingerprint = Boolean(
+      compactChatMatchValue(item.messageFingerprint)
+      && compactChatMatchValue(item.messageFingerprint) === compactChatMatchValue(evidence.current_message_fingerprint),
+    );
+    const sameLatest = sameMessageFingerprint || chatMessageMatches(item.latest_hr_message, evidence.latest_hr_message);
     return Boolean(hasComparableNames && sameName && sameContext && sameLatest);
   }
 
@@ -2570,6 +2634,7 @@ ${runtimeStateHtml()}
       salary: text(positionRoot || document, ".salary"),
       city: text(positionRoot || document, ".city"),
       latest_hr_message: latestHr?.content || "",
+      current_message_fingerprint: selectedInfo?.messageFingerprint || "",
       latest_message_role: latestMessage?.role || "",
       has_user_replied_after_latest_hr: hasUserRepliedAfterLatestHr,
       queued_latest_hr_message: queueItem?.latest_hr_message || "",
@@ -3500,6 +3565,9 @@ ${runtimeStateHtml()}
       await renderChatAssistant(message);
       return { ok: false, filled: false, data, error: message };
     }
+    if (chatInputText(currentInput)) {
+      return stopHrReplyBecauseInputHasDraft(item);
+    }
     fillChatInput(currentInput, String(data.draft || "").trim());
     const message = `草稿已填入，请用户确认发送。\n${modeText}${durationText}`;
     if (item?.id) await markHrReplyQueueItem(item.id, "draft_filled", message, { statusReason: "draft_filled", cleanupDuplicates: true });
@@ -3730,6 +3798,12 @@ ${runtimeStateHtml()}
         button.textContent = "海投进行中";
       }
       try {
+        const blockReason = await autoApplyGlobalBlockReason();
+        if (blockReason) {
+          pauseLocalAutoApplyForHrReply();
+          renderScanSummary(blockReason);
+          return;
+        }
         enableAutoApplyTask();
         await saveJobPanelControls();
         await runAutoApplyLoop("启动海投：扫描当前可见岗位。");
@@ -3930,6 +4004,12 @@ ${runtimeStateHtml()}
 
   async function runAutoApplyLoop(prefix = "") {
     if (!panel || panelMode !== "jobs" || autoApplyLoopRunning || analyzing || scanningMore) return false;
+    const blockReason = await autoApplyGlobalBlockReason();
+    if (blockReason) {
+      pauseLocalAutoApplyForHrReply();
+      renderScanSummary(blockReason);
+      return false;
+    }
     const lock = acquireTaskLock("auto_apply", { label: "海投扫描" });
     if (!lock.ok) {
       renderScanSummary(`当前正在${lock.current?.label || "执行其他页面任务"}，海投暂未启动。`);
@@ -4825,6 +4905,12 @@ ${runtimeStateHtml()}
     return candidates.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0] || null;
   }
 
+  function chatInputText(input) {
+    if (!input) return "";
+    if ("value" in input) return String(input.value || "").replace(/\s+/g, " ").trim();
+    return inlineText(input);
+  }
+
   function fillChatInput(input, message) {
     input.focus();
     if ("value" in input) {
@@ -5347,6 +5433,14 @@ ${runtimeStateHtml()}
 
   function canUseBackgroundRequest() {
     return typeof chrome !== "undefined" && Boolean(chrome.runtime?.sendMessage);
+  }
+
+  async function autoApplyGlobalBlockReason() {
+    const stored = await storageGetChecked([HR_REPLY_GLOBAL_LOCK_KEY]);
+    if (!stored.ok) return "无法确认 HR 回复任务状态，海投暂未启动；请刷新页面后重试。";
+    const lock = stored.items[HR_REPLY_GLOBAL_LOCK_KEY];
+    if (Number(lock?.expiresAt || 0) <= Date.now()) return "";
+    return "另一个 BOSS 标签页正在处理 HR 回复，海投暂未启动；处理完成后请手动重试。";
   }
 
   function matchTimeoutMsForMode(mode) {

@@ -31,6 +31,9 @@ function makeHarness(options = {}) {
   const created = [];
   const storedStates = [];
   const badgeUpdates = [];
+  const removedKeys = [];
+  const sentMessages = [];
+  const storageData = { ...(options.stored || {}) };
   let createFailures = Number(options.createFailures || 0);
   let sendCount = 0;
 
@@ -61,10 +64,12 @@ function makeHarness(options = {}) {
     },
     tabs: {
       query: async () => options.tabs || [{ id: 7, active: true, lastAccessed: 1 }],
-      sendMessage: async () => {
+      sendMessage: async (tabId, message) => {
         sendCount += 1;
+        sentMessages.push({ tabId, message });
         if (options.sendDeferred) return options.sendDeferred.promise;
         if (options.sendFails) throw new Error("send_failed");
+        if (options.sendHandler) return options.sendHandler(tabId, message);
         return options.response || { ok: true, skipped: false, reason: "scan_complete", count: 1 };
       },
     },
@@ -73,11 +78,16 @@ function makeHarness(options = {}) {
       local: {
         get: async () => {
           if (options.storageGetFails) throw new Error("storage_get_failed");
-          return options.stored || {};
+          return { ...storageData };
         },
         set: async (value) => {
           storedStates.push(value);
           if (options.storageSetFails) throw new Error("storage_set_failed");
+          Object.assign(storageData, value);
+        },
+        remove: async (key) => {
+          removedKeys.push(key);
+          delete storageData[key];
         },
       },
     },
@@ -102,9 +112,19 @@ function makeHarness(options = {}) {
     created,
     badgeUpdates,
     listeners,
+    removedKeys,
+    sentMessages,
+    storageData,
     storedStates,
     get sendCount() { return sendCount; },
   };
+}
+
+function dispatchRuntimeRequest(harness, request, sender = { tab: { id: 7 } }) {
+  return new Promise((resolve) => {
+    const keepChannelOpen = harness.listeners.message[0](request, sender, resolve);
+    assert.equal(keepChannelOpen, true);
+  });
 }
 
 async function run(name, fn) {
@@ -217,7 +237,54 @@ async function run(name, fn) {
     assert.equal(harness.badgeUpdates.find((item) => item.kind === "text").value.text, "2");
   });
 
-  process.stdout.write("hr_reply_background_scheduler: 8 scenarios passed\n");
+  await run("HR reply task pauses other BOSS tabs and releases only its own lock", async () => {
+    const harness = makeHarness({
+      existingAlarm: true,
+      tabs: [{ id: 7 }, { id: 8 }, { id: 9 }],
+      sendHandler: async (tabId, message) => ({
+        ok: true,
+        paused: message.action === "jobAccelerator.pauseAutoApplyForHrReply" && tabId === 8,
+      }),
+    });
+    await settle();
+
+    const [firstBegin, secondBegin] = await Promise.all([
+      dispatchRuntimeRequest(harness, {
+        action: "jobAccelerator.beginHrReplyTask",
+      }),
+      dispatchRuntimeRequest(harness, {
+        action: "jobAccelerator.beginHrReplyTask",
+      }, { tab: { id: 9 } }),
+    ]);
+    const begin = firstBegin.ok ? firstBegin : secondBegin;
+    const busy = firstBegin.busy ? firstBegin : secondBegin;
+    assert.equal(begin.ok, true);
+    assert.equal(begin.pausedCount, 1);
+    assert.equal(typeof begin.lockToken, "string");
+    assert.equal(harness.sentMessages.length, 2);
+    assert.deepEqual(harness.sentMessages.map((entry) => entry.tabId), [8, 9]);
+    assert.equal(harness.sentMessages.every((entry) => entry.message.action === "jobAccelerator.pauseAutoApplyForHrReply"), true);
+    assert.equal(harness.storageData.job_accelerator_hr_reply_global_lock.ownerTabId, 7);
+    assert.equal(busy.ok, false);
+    assert.equal(busy.busy, true);
+
+    const wrongRelease = await dispatchRuntimeRequest(harness, {
+      action: "jobAccelerator.endHrReplyTask",
+      lockToken: "wrong-token",
+    });
+    assert.equal(wrongRelease.released, false);
+    assert.notEqual(harness.storageData.job_accelerator_hr_reply_global_lock, undefined);
+
+    const released = await dispatchRuntimeRequest(harness, {
+      action: "jobAccelerator.endHrReplyTask",
+      lockToken: begin.lockToken,
+    });
+    assert.equal(released.released, true);
+    assert.equal(harness.storageData.job_accelerator_hr_reply_global_lock, undefined);
+    assert.deepEqual(harness.removedKeys, ["job_accelerator_hr_reply_global_lock"]);
+  });
+
+  process.stdout.write("hr_reply_background_scheduler: 9 scenarios passed\n");
 })().catch((error) => {
   console.error(error);
   process.exitCode = 1;

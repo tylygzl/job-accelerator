@@ -14,6 +14,12 @@
     needs_user: 2,
     draft_filled: 3,
   });
+  const PRIVATE_QUEUE_FIELDS = Object.freeze([
+    "latest_hr_message",
+    "queued_latest_hr_message",
+    "conversation",
+    "chat_history",
+  ]);
 
   function valueOf(snapshot, names) {
     for (const name of names) {
@@ -161,6 +167,17 @@
       : [];
   }
 
+  function sanitizeQueueItem(item = {}) {
+    const safe = { ...item };
+    PRIVATE_QUEUE_FIELDS.forEach((field) => delete safe[field]);
+    safe.message_summary = item.debug ? "开发测试会话" : "收到新的 HR 回复";
+    return safe;
+  }
+
+  function sanitizeQueueItems(value) {
+    return normalizeQueue(value).map(sanitizeQueueItem);
+  }
+
   function queueItemKey(item = {}) {
     const conversation = textValue(item.conversationFingerprint);
     const message = textValue(item.messageFingerprint);
@@ -250,7 +267,7 @@
           || item.statusChangedAt,
       });
     });
-    return cleanupResolvedRecoverableItems(Array.from(map.values()));
+    return sanitizeQueueItems(cleanupResolvedRecoverableItems(Array.from(map.values())));
   }
 
   function pendingItems(value) {
@@ -354,6 +371,7 @@
           && ["needs_user", "draft_filled"].includes(previous.status)
           ? previous.status
           : (item.status || "pending");
+        map.delete(key);
         map.set(key, {
           ...previous,
           ...item,
@@ -370,7 +388,16 @@
           updatedAt: now,
         });
       });
-    return Array.from(map.values()).slice(-limit);
+    return Array.from(map.values())
+      .map((item, index) => ({ item, index, activityAt: queueActivityTime(item) }))
+      .sort((left, right) => left.activityAt - right.activityAt || left.index - right.index)
+      .slice(-limit)
+      .map(({ item }) => sanitizeQueueItem(item));
+  }
+
+  function queueActivityTime(item = {}) {
+    const parsed = Date.parse(item.updatedAt || item.messageFirstSeenAt || item.firstSeenAt || "");
+    return Number.isFinite(parsed) ? parsed : 0;
   }
 
   return {
@@ -382,6 +409,8 @@
     pendingItems,
     dedupeQueueItems,
     normalizeQueue,
+    sanitizeQueueItem,
+    sanitizeQueueItems,
     isRecoverableQueueStatus,
     cleanupResolvedRecoverableItems,
   };

@@ -24,8 +24,12 @@ const HR_REPLY_BADGE = self.HRReplyBadge || null;
 const HR_REPLY_ALARM_NAME = "job_accelerator_hr_reply_scan";
 const HR_REPLY_SCHEDULER_STATE_KEY = "job_accelerator_hr_reply_scheduler_state";
 const HR_REPLY_QUEUE_KEY = "job_accelerator_hr_reply_queue";
+const HR_REPLY_GLOBAL_LOCK_KEY = "job_accelerator_hr_reply_global_lock";
+const HR_REPLY_GLOBAL_LOCK_TTL_MS = 2 * 60 * 1000;
 const BOSS_CHAT_TAB_PATTERN = "*://*.zhipin.com/web/geek/chat*";
+const BOSS_TAB_PATTERN = "*://*.zhipin.com/*";
 let hrReplyAlarmRunning = false;
+let hrReplyTaskTransition = Promise.resolve();
 
 if (HR_REPLY_SCHEDULER && chrome.alarms && chrome.tabs && chrome.storage?.local) {
   chrome.alarms.onAlarm.addListener((alarm) => {
@@ -70,7 +74,7 @@ if (HR_REPLY_BADGE && chrome.action && chrome.storage?.local) {
   updateHrReplyBadgeFromStorage().catch(() => {});
 }
 
-chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request?.action === "jobAccelerator.match") {
     handleMatchRequest(request)
       .then((result) => sendResponse(result))
@@ -94,6 +98,20 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         });
       });
 
+    return true;
+  }
+
+  if (request?.action === "jobAccelerator.beginHrReplyTask") {
+    serializeHrReplyTaskTransition(() => beginGlobalHrReplyTask(sender?.tab?.id))
+      .then((result) => sendResponse(result))
+      .catch((error) => sendResponse({ ok: false, error: formatBackgroundError(error) }));
+    return true;
+  }
+
+  if (request?.action === "jobAccelerator.endHrReplyTask") {
+    serializeHrReplyTaskTransition(() => endGlobalHrReplyTask(request.lockToken))
+      .then((result) => sendResponse(result))
+      .catch((error) => sendResponse({ ok: false, error: formatBackgroundError(error) }));
     return true;
   }
 
@@ -199,6 +217,57 @@ async function updateHrReplyBadge(queue) {
     await chrome.action.setTitle({ title: `求职加速器 · ${model.title}` });
   }
   return true;
+}
+
+function serializeHrReplyTaskTransition(task) {
+  const next = hrReplyTaskTransition.then(task, task);
+  hrReplyTaskTransition = next.catch(() => {});
+  return next;
+}
+
+async function beginGlobalHrReplyTask(ownerTabId) {
+  const now = Date.now();
+  const stored = await chrome.storage.local.get([HR_REPLY_GLOBAL_LOCK_KEY]);
+  const existing = stored[HR_REPLY_GLOBAL_LOCK_KEY];
+  if (Number(existing?.expiresAt || 0) > now) {
+    return { ok: false, busy: true, error: "另一个标签页正在处理 HR 回复，请稍后重试。" };
+  }
+
+  const lockToken = `hr_reply_${now}_${Math.random().toString(16).slice(2)}`;
+  await chrome.storage.local.set({
+    [HR_REPLY_GLOBAL_LOCK_KEY]: {
+      ownerTabId: Number.isInteger(ownerTabId) ? ownerTabId : null,
+      lockToken,
+      expiresAt: now + HR_REPLY_GLOBAL_LOCK_TTL_MS,
+    },
+  });
+
+  const tabs = await chrome.tabs.query({ url: BOSS_TAB_PATTERN });
+  let pausedCount = 0;
+  await Promise.all(tabs
+    .filter((tab) => Number.isInteger(tab.id) && tab.id !== ownerTabId)
+    .map(async (tab) => {
+      try {
+        const response = await chrome.tabs.sendMessage(tab.id, {
+          action: "jobAccelerator.pauseAutoApplyForHrReply",
+        });
+        if (response?.paused) pausedCount += 1;
+      } catch (_) {
+        // The shared lock remains visible to content scripts loaded after this broadcast.
+      }
+    }));
+
+  return { ok: true, lockToken, pausedCount };
+}
+
+async function endGlobalHrReplyTask(lockToken) {
+  const token = String(lockToken || "").trim();
+  if (!token) return { ok: false, error: "缺少 HR 回复任务锁。" };
+  const stored = await chrome.storage.local.get([HR_REPLY_GLOBAL_LOCK_KEY]);
+  const existing = stored[HR_REPLY_GLOBAL_LOCK_KEY];
+  if (existing?.lockToken !== token) return { ok: true, released: false };
+  await chrome.storage.local.remove(HR_REPLY_GLOBAL_LOCK_KEY);
+  return { ok: true, released: true };
 }
 
 async function handleMatchRequest(request) {

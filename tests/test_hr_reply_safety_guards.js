@@ -113,6 +113,23 @@ test("conversation and input are checked immediately before filling", () => {
   const block = functionSource("handleChatReplyResult");
   assertOrdered(block, "replyTargetStillCurrent(evidence, fillEvidence, item)", "fillChatInput(currentInput", "conversation must be checked before filling");
   assertOrdered(block, "currentInput !== input", "fillChatInput(currentInput", "the same editor must still be active before filling");
+  assertOrdered(block, "chatInputText(currentInput)", "fillChatInput(currentInput", "an existing draft must be checked before filling");
+
+  const processBlock = functionSource("processHrReplyTarget");
+  assertOrdered(processBlock, "chatInputText(findChatInput())", "await requestChatReply(requestEvidence)", "an existing draft must stop the backend request");
+});
+
+test("HR reply processing coordinates all BOSS tabs before auto apply can run", () => {
+  const processBlock = functionSource("processHrReplyTarget");
+  assertOrdered(processBlock, "await pauseAutoApplyForHrReply()", "await requestChatReply(requestEvidence)", "global pause must complete before generating a draft");
+  assertOrdered(processBlock, "await releaseGlobalHrReplyTask(pausedInfo.globalLockToken)", "hrReplyProcessing = false", "the global lock must be released in finally");
+
+  const pauseBlock = functionSource("pauseAutoApplyForHrReply");
+  assert.match(pauseBlock, /jobAccelerator\.beginHrReplyTask/);
+  const startBlock = functionSource("startAutoApplyFromMessage");
+  assertOrdered(startBlock, "await autoApplyGlobalBlockReason()", "enableAutoApplyTask()", "message-based starts must check the global lock");
+  const loopBlock = functionSource("runAutoApplyLoop");
+  assertOrdered(loopBlock, "await autoApplyGlobalBlockReason()", "acquireTaskLock(\"auto_apply\"", "the loop must recheck the global lock before acquiring work");
 });
 
 test("HR reply task lock is not reentrant", () => {

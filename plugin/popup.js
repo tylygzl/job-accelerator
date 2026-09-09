@@ -302,7 +302,7 @@ function renderHrReplyState(state = {}) {
     return `<div class="reply-card${done ? " done" : ""}">
   <div class="reply-title">${escapeHtml(item.hr_name || "未知 HR")}</div>
   <div class="reply-meta">${escapeHtml(meta)}</div>
-  <div class="reply-last">${escapeHtml(item.latest_hr_message || "未读消息")}</div>
+  <div class="reply-last">${escapeHtml(item.message_summary || "收到新的 HR 回复")}</div>
   <div class="reply-actions">
     <button class="btn secondary" type="button" data-hr-reply-id="${escapeHtml(item.id)}">处理回复</button>
     <span class="reply-state">${escapeHtml(stateText)}</span>
