@@ -22,6 +22,7 @@ const checkHrReplyBtn = document.getElementById("checkHrReplyBtn");
 const hrReplyCountEl = document.getElementById("hrReplyCount");
 const hrReplyListEl = document.getElementById("hrReplyList");
 const PLUGIN_CONFIG = window.JOB_ACCELERATOR_CONFIG || {};
+const HR_REPLY_DISCOVERY = window.HRReplyDiscovery || null;
 const LOCAL_DEFAULT_API = "http://127.0.0.1:8000/match";
 const DEFAULT_API = normalizeApiUrl(PLUGIN_CONFIG.DEFAULT_API || LOCAL_DEFAULT_API, LOCAL_DEFAULT_API);
 const DEFAULT_API_TOKEN = PLUGIN_CONFIG.API_TOKEN || "";
@@ -261,12 +262,15 @@ function clearPageSessionCache() {
 }
 
 function normalizeHrReplyQueue(value) {
+  if (HR_REPLY_DISCOVERY) return HR_REPLY_DISCOVERY.dedupeQueueItems(value);
   if (!Array.isArray(value)) return [];
   return value.filter((item) => item && item.id);
 }
 
 function pendingHrReplyItems(queue) {
-  return normalizeHrReplyQueue(queue).filter((item) => item.status !== "draft_filled");
+  return HR_REPLY_DISCOVERY
+    ? HR_REPLY_DISCOVERY.pendingItems(queue)
+    : normalizeHrReplyQueue(queue).filter((item) => ["pending", "needs_user"].includes(item.status));
 }
 
 function renderHrReplyState(state = {}) {
@@ -298,7 +302,7 @@ function renderHrReplyState(state = {}) {
     return `<div class="reply-card${done ? " done" : ""}">
   <div class="reply-title">${escapeHtml(item.hr_name || "未知 HR")}</div>
   <div class="reply-meta">${escapeHtml(meta)}</div>
-  <div class="reply-last">${escapeHtml(item.latest_hr_message || "未读消息")}</div>
+  <div class="reply-last">${escapeHtml(item.message_summary || "收到新的 HR 回复")}</div>
   <div class="reply-actions">
     <button class="btn secondary" type="button" data-hr-reply-id="${escapeHtml(item.id)}">处理回复</button>
     <span class="reply-state">${escapeHtml(stateText)}</span>
@@ -464,7 +468,7 @@ async function sendMessageToBossPage(message) {
   } catch (e) {
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      files: ["config.js", "content.js"],
+      files: ["config.js", "hr_reply_discovery.js", "content.js"],
     });
     setStatus("正在连接 BOSS 页面...");
     return chrome.tabs.sendMessage(tab.id, message);

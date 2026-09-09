@@ -1,0 +1,39 @@
+flowchart TD
+  A["用户点击某条“处理回复”"] --> B["HR 任务抢占 task lock<br/>如海投运行则暂停海投"]
+  B --> C{"当前是否在消息页？"}
+  C -->|否| D["记住一次性任务并进入消息页<br/>刷新或失败不会自动重试"]
+  D --> E["重新扫描并刷新队列项"]
+  C -->|是| E
+  E --> F["定位对应会话并读取当前聊天 DOM"]
+  F --> G{"队列与当前会话一致？"}
+  G -->|否| X["标记 needs_user<br/>reason = conversation_mismatch"]
+  X --> X1["不请求后端、不填草稿、不发送"]
+
+  G -->|是| H{"最新 HR 消息之后<br/>用户已经回复？"}
+  H -->|是| I["移除旧队列项<br/>不重复生成草稿"]
+  H -->|否| J["再次读取实时聊天证据<br/>调用 /chat/reply"]
+  J --> K{"生成期间会话仍一致？"}
+  K -->|否| X
+  K -->|是| L{"后端允许 fill_draft<br/>且输入框仍是同一个？"}
+  L -->|否| M["needs_user / 人工接管<br/>不填草稿"]
+  L -->|是| N["第三次复验会话与用户回复状态"]
+  N -->|已变化| X
+  N -->|未变化| O["只把草稿写入输入框"]
+  O --> P["状态改为 draft_filled<br/>清理同会话旧误拒和开发重复项"]
+  P --> Q["用户检查内容后手动发送"]
+
+  R["一致性判定优先级<br/>稳定 data hint；缺失时回退到<br/>HR 名称 + 岗位或公司 + 消息摘要"] -.用于三次复验.-> G
+  R -.用于三次复验.-> K
+  R -.用于三次复验.-> N
+  T["当前真实未读已清空<br/>误拒修复仍待下一条真实未读做同场景回归"] -.验收状态.-> X
+
+  classDef user fill:#fff4cc,stroke:#a36a00,color:#3d2a00;
+  classDef process fill:#e8f8ee,stroke:#2f7d4a,color:#123820;
+  classDef decision fill:#e8f1ff,stroke:#3268a8,color:#122a46;
+  classDef stop fill:#ffe9e9,stroke:#ad3f3f,color:#4b1717;
+  classDef note fill:#f0f1f5,stroke:#636b78,color:#22252b;
+  class A,Q user;
+  class B,D,E,F,J,O,P process;
+  class C,G,H,K,L,N decision;
+  class X,X1,I,M stop;
+  class R,T note;

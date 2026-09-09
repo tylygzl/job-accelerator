@@ -3,7 +3,7 @@
   "name": "求职加速器",
   "version": "0.2.3",
   "description": "BOSS 直聘岗位海投、筛选与沟通草稿助手",
-  "permissions": ["activeTab", "storage", "scripting"],
+  "permissions": ["activeTab", "storage", "scripting", "alarms"],
   "host_permissions": [
     "*://*.zhipin.com/*",
     "http://127.0.0.1/*",
@@ -19,7 +19,7 @@
   "content_scripts": [
     {
       "matches": ["*://*.zhipin.com/*"],
-      "js": ["config.js", "content.js"],
+      "js": ["config.js", "hr_reply_discovery.js", "content.js"],
       "run_at": "document_idle"
     }
   ]
